@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
+from .. import cache
 from ..database import get_db
 from ..models import Region, Variety
 from ..responses import ok, paged, page_args
@@ -128,6 +129,7 @@ def alerts_evaluate(
     except (TypeError, ValueError):
         raise ApiError("E4001", "扫描天数必须为整数", 400)
     result = alerting.evaluate_rules(db, days=days)
+    cache.invalidate("dashboard")
     write_audit(
         db,
         user,

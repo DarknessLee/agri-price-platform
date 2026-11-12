@@ -1,10 +1,12 @@
 """元数据接口：字典与按权限过滤的菜单树。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import cache
+from ..config import CACHE_TTL_DICT
 from ..database import get_db
 from ..models import Market, Menu, Region, Role, Variety
 from ..responses import ok
@@ -22,13 +24,20 @@ ALERT_LEVELS = ["高", "中", "低"]
 
 
 @router.get("/dicts")
-def dicts(user: CurrentUser, db: Session = Depends(get_db)):
+def dicts(response: Response, user: CurrentUser, db: Session = Depends(get_db)):
+    """基础字典（与用户权限无关，可缓存）。"""
+    cache_key = cache.make_key("meta", "dicts")
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return ok(cached)
+
     varieties = db.execute(select(Variety).order_by(Variety.sort, Variety.id)).scalars().all()
     regions = db.execute(select(Region).order_by(Region.sort, Region.id)).scalars().all()
     markets = db.execute(select(Market).order_by(Market.region_code, Market.id)).scalars().all()
     roles = db.execute(select(Role)).scalars().all()
     region_code_set = {r.code for r in regions}
-    return ok({
+    payload = {
         "varieties": [
             {"id": v.id, "code": v.code, "name": v.name, "category": v.category, "unit": v.unit}
             for v in varieties if v.enabled
@@ -51,7 +60,10 @@ def dicts(user: CurrentUser, db: Session = Depends(get_db)):
         "alert_levels": ALERT_LEVELS,
         "report_types": REPORT_TYPES,
         "roles": [{"key": r.key, "name": r.name} for r in roles],
-    })
+    }
+    cache.set(cache_key, payload, CACHE_TTL_DICT)
+    response.headers["X-Cache"] = "MISS"
+    return ok(payload)
 
 
 def _menu_tree(rows: list[Menu], owned: set[str]) -> list[dict]:

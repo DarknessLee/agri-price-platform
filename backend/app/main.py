@@ -98,6 +98,7 @@ _include_routers()
 
 @app.get("/api/health")
 def health():
+    from .cache import cache_available
     from .database import SessionLocal
     from sqlalchemy import text
 
@@ -107,10 +108,15 @@ def health():
             db.execute(text("SELECT 1"))
     except Exception:  # pragma: no cover - 健康检查兜底
         db_ok = False
+    try:
+        cache_ok = cache_available()
+    except Exception:  # pragma: no cover - 缓存探测兜底
+        cache_ok = False
     return {
         "status": "ok" if db_ok else "degraded",
         "version": APP_VERSION,
         "db": "ok" if db_ok else "error",
+        "cache": "ok" if cache_ok else "error",
         "uptime_seconds": int(time.time() - STARTED_AT),
     }
 

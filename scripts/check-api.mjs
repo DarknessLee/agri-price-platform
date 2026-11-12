@@ -1,10 +1,8 @@
 /**
  * 接口门禁：启动后端 → 鉴权与权限隔离 → 各业务模块接口断言 → 停止后端。
- * 依赖：已执行种子数据（缺失时自动重建，且跳过模型训练以保证门禁时长可控）。
+ * 依赖：已执行种子数据（缺失或数据不足时自动重建，且跳过模型训练以保证门禁时长可控）。
  */
 import path from 'node:path'
-import { existsSync } from 'node:fs'
-import { DatabaseSync } from 'node:sqlite'
 import {
   BACKEND_DIR,
   BASE_URL,
@@ -15,6 +13,7 @@ import {
   ensureDirs,
   login,
   run,
+  runCapture,
   sleep,
   startBackend,
 } from './lib.mjs'
@@ -52,10 +51,35 @@ async function section(title, fn) {
   }
 }
 
-// ---------- 准备：确保数据库存在 ----------
-const dbPath = path.join(ROOT, '.runtime', 'agri.db')
-if (!existsSync(dbPath)) {
-  console.log('未检测到数据库，先执行种子重建（不含模型训练）…')
+// ---------- 准备：确保数据库可用且已有种子数据 ----------
+function readDatabaseState() {
+  const probe = `
+import json
+from sqlalchemy import text
+from app.database import engine
+
+payload = {"ok": False}
+try:
+    with engine.connect() as conn:
+        payload["prices"] = int(conn.execute(text("SELECT COUNT(*) FROM price_record")).scalar() or 0)
+        payload["varieties"] = int(conn.execute(text("SELECT COUNT(*) FROM dim_variety")).scalar() or 0)
+        payload["ok"] = True
+except Exception as exc:  # noqa: BLE001 - 门禁只需判断可用性
+    payload["error"] = str(exc)[:300]
+print(json.dumps(payload, ensure_ascii=False))
+`
+  const out = runCapture(VENV_PY, ['-c', probe], { cwd: BACKEND_DIR })
+  const line = (out.stdout || '').trim().split(/\r?\n/).pop()
+  try {
+    return JSON.parse(line)
+  } catch {
+    return { ok: false, error: (out.stderr || out.stdout || '').slice(-300) }
+  }
+}
+
+const dbState = readDatabaseState()
+if (!dbState.ok || dbState.varieties < 5 || dbState.prices < 80000) {
+  console.log(`数据库未就绪（${dbState.ok ? `价格 ${dbState.prices} 行、品种 ${dbState.varieties} 个` : dbState.error}），先执行种子重建（不含模型训练）…`)
   const seeded = run(VENV_PY, ['-m', 'app.seed', '--reset', '--no-models'], { cwd: BACKEND_DIR, stdio: 'inherit' })
   checker.check('数据库缺失时自动种子重建成功', seeded.status === 0, `exit ${seeded.status}`)
 }
@@ -69,8 +93,10 @@ try {
     const healthBody = await healthRes.json()
     checker.check('GET /api/health 返回正常状态', healthRes.status === 200 && healthBody?.status === 'ok', JSON.stringify(healthBody))
     checker.check(
-      '健康检查包含版本/数据库/运行时长',
-      Boolean(healthBody?.version && healthBody?.db) && typeof healthBody?.uptime_seconds === 'number',
+      '健康检查包含版本/数据库/缓存状态/运行时长',
+      Boolean(healthBody?.version && healthBody?.db) &&
+        ['ok', 'error'].includes(healthBody?.cache) &&
+        typeof healthBody?.uptime_seconds === 'number',
       JSON.stringify(healthBody),
     )
 
@@ -84,7 +110,11 @@ try {
     checker.check('登录返回 token 有效期', Number(adminAuth.expires_in) > 0, `expires_in=${adminAuth.expires_in}`)
 
     ok('GET /api/auth/me 返回当前用户', await callApi('/api/auth/me', { token: adminAuth.token }), (d) => (d?.user?.username || d?.username) === 'admin')
-    ok('POST /api/auth/logout 正常退出', await callApi('/api/auth/logout', { method: 'POST', token: adminAuth.token }))
+
+    const logoutAuth = await login('admin', 'Admin@2026')
+    ok('POST /api/auth/logout 正常退出', await callApi('/api/auth/logout', { method: 'POST', token: logoutAuth.token }))
+    const revoked = await callApi('/api/auth/me', { token: logoutAuth.token })
+    checker.check('注销后旧令牌立即失效（E4010）', revoked.code === 'E4010', `code=${revoked.code} status=${revoked.status}`)
 
     const noToken = await callApi('/api/dashboard/summary')
     checker.check('未携带 token 访问业务接口返回 401/E4010', noToken.code === 'E4010', `code=${noToken.code} status=${noToken.status}`)
@@ -117,6 +147,22 @@ try {
 
     const viewerMonitor = await callApi('/api/prices?page=1&page_size=5', { token: viewerAuth.token })
     ok('观察员可查看价格监测数据', viewerMonitor, (d) => d?.total > 0)
+  })
+
+  // ---------- 2b. Redis 缓存观测 ----------
+  await section('Redis 缓存与失效', async () => {
+    const first = await callApi('/api/dashboard/summary', { token: adminAuth.token })
+    const firstCache = first.headers?.get?.('x-cache')
+    const second = await callApi('/api/dashboard/summary', { token: adminAuth.token })
+    const secondCache = second.headers?.get?.('x-cache')
+    checker.check('驾驶舱汇总返回 x-cache 标识', ['HIT', 'MISS'].includes(firstCache), `x-cache=${firstCache}`)
+    checker.check('重复请求驾驶舱汇总命中缓存（HIT）', secondCache === 'HIT', `x-cache=${secondCache}`)
+    checker.check('缓存命中与回源返回数据一致', JSON.stringify(second.data) === JSON.stringify(first.data))
+
+    const dictFirst = await callApi('/api/meta/dicts', { token: adminAuth.token })
+    const dictSecond = await callApi('/api/meta/dicts', { token: adminAuth.token })
+    checker.check('字典接口返回 x-cache 标识', ['HIT', 'MISS'].includes(dictFirst.headers?.get?.('x-cache')), `x-cache=${dictFirst.headers?.get?.('x-cache')}`)
+    checker.check('字典接口重复请求命中缓存（HIT）', dictSecond.headers?.get?.('x-cache') === 'HIT', `x-cache=${dictSecond.headers?.get?.('x-cache')}`)
   })
 
   // ---------- 3. 元数据 ----------
@@ -438,14 +484,17 @@ try {
 
     ok('GET /api/data/import-tasks 返回导入任务', await callApi('/api/data/import-tasks?page=1&page_size=10', { token: adminAuth.token }), (d) => d?.total >= 3)
 
-    // 清理门禁写入的演示数据行，保持种子库日期范围与驾驶舱口径干净
-    try {
-      const db = new DatabaseSync(dbPath)
-      db.exec("DELETE FROM price_record WHERE price_date = '2026-11-15'")
-      db.close()
-    } catch (error) {
-      checker.check('清理门禁导入数据', false, String(error))
-    }
+    // 清理门禁写入的临时价格行，保持种子库日期范围与驾驶舱口径干净
+    const cleanupScript = `
+from sqlalchemy import text
+from app.database import engine
+
+with engine.begin() as conn:
+    conn.execute(text("DELETE FROM price_record WHERE price_date = '2026-11-15'"))
+print("cleaned")
+`
+    const cleaned = runCapture(VENV_PY, ['-c', cleanupScript], { cwd: BACKEND_DIR })
+    checker.check('清理门禁导入的临时价格行', cleaned.status === 0, `exit ${cleaned.status}`)
   })
 
   // ---------- 12. 后台管理 ----------

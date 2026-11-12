@@ -4,10 +4,12 @@ from __future__ import annotations
 import statistics
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import cache
+from ..config import CACHE_TTL_DASHBOARD
 from ..database import get_db, now
 from ..models import (
     AlertRecord,
@@ -61,10 +63,17 @@ def _latest_alert_date(db: Session) -> date | None:
 
 @router.get("/summary")
 def dashboard_summary(
+    response: Response,
     _perm: object = Depends(require_permission("dashboard:view")),
     db: Session = Depends(get_db),
 ):
-    """驾驶舱总览卡片。"""
+    """驾驶舱总览卡片（Redis 缓存，TTL 见 CACHE_TTL_DASHBOARD）。"""
+    cache_key = cache.make_key("dashboard", "summary")
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return ok(cached)
+
     variety_count = int(db.execute(select(func.count(Variety.id))).scalar() or 0)
     region_count = int(db.execute(select(func.count(Region.id))).scalar() or 0)
     market_count = int(db.execute(select(func.count(Market.id))).scalar() or 0)
@@ -143,30 +152,32 @@ def dashboard_summary(
 
     last_forecast_at = db.execute(select(func.max(ForecastResult.created_at))).scalar()
 
-    return ok(
-        {
-            "kpi": {
-                "variety_count": variety_count,
-                "region_count": region_count,
-                "market_count": market_count,
-                "record_count": record_count,
-                "avg_price": avg_price,
-                "yoy_pct": yoy,
-                "alert_open": alert_open,
-                "alert_today": alert_today,
-                "avg_mape": pricing.r2(mape) if mape is not None else 0.0,
-                "direction_acc": pricing.r2(direction_acc) if direction_acc is not None else 0.0,
-                "completeness": quality.completeness(db),
-            },
-            "latest_price_date": _fmt_date(latest),
-            "last_forecast_at": _fmt_time(last_forecast_at),
-            "updated_at": _fmt_time(now()),
-        }
-    )
+    payload = {
+        "kpi": {
+            "variety_count": variety_count,
+            "region_count": region_count,
+            "market_count": market_count,
+            "record_count": record_count,
+            "avg_price": avg_price,
+            "yoy_pct": yoy,
+            "alert_open": alert_open,
+            "alert_today": alert_today,
+            "avg_mape": pricing.r2(mape) if mape is not None else 0.0,
+            "direction_acc": pricing.r2(direction_acc) if direction_acc is not None else 0.0,
+            "completeness": quality.completeness(db),
+        },
+        "latest_price_date": _fmt_date(latest),
+        "last_forecast_at": _fmt_time(last_forecast_at),
+        "updated_at": _fmt_time(now()),
+    }
+    cache.set(cache_key, payload, CACHE_TTL_DASHBOARD)
+    response.headers["X-Cache"] = "MISS"
+    return ok(payload)
 
 
 @router.get("/trend")
 def dashboard_trend(
+    response: Response,
     variety_id: int | None = Query(default=None),
     region_id: int | None = Query(default=None),
     days: int = Query(default=90, ge=1, le=3650),
@@ -175,6 +186,11 @@ def dashboard_trend(
 ):
     """价格指数趋势：未指定品种时返回综合均价 + 分品类序列。"""
     days = max(1, int(days or 90))
+    cache_key = cache.make_key("dashboard", "trend", variety_id, region_id, days)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return ok(cached)
     anchor = pricing.latest_price_date(db, variety_id=variety_id) or date.today()
     start = anchor - timedelta(days=days - 1)
     series: list[dict] = []
@@ -231,40 +247,52 @@ def dashboard_trend(
             yoy = pricing.pct_change(latest_price, base)
     yoy = 0.0 if yoy is None else pricing.r2(yoy)
 
-    return ok(
-        {
-            "dates": [_fmt_date(day) for day in dates],
-            "series": series,
-            "unit": unit,
-            "latest": {
-                "date": _fmt_date(dates[-1]) if dates else None,
-                "price": pricing.r2(latest_price),
-                "yoy_pct": yoy,
-                "change": pricing.r2(change) if change is not None else 0.0,
-            },
-        }
-    )
+    payload = {
+        "dates": [_fmt_date(day) for day in dates],
+        "series": series,
+        "unit": unit,
+        "latest": {
+            "date": _fmt_date(dates[-1]) if dates else None,
+            "price": pricing.r2(latest_price),
+            "yoy_pct": yoy,
+            "change": pricing.r2(change) if change is not None else 0.0,
+        },
+    }
+    cache.set(cache_key, payload, CACHE_TTL_DASHBOARD)
+    response.headers["X-Cache"] = "MISS"
+    return ok(payload)
 
 
 @router.get("/region-heat")
 def dashboard_region_heat(
+    response: Response,
     variety_id: int | None = Query(default=None, description="品种ID，缺省取排序第一的在用品种"),
     on_date: str | None = Query(default=None, alias="date", description="日期 YYYY-MM-DD"),
     _perm: object = Depends(require_permission("dashboard:view")),
     db: Session = Depends(get_db),
 ):
     """区域热力：各地区当日均价、同比与等级。"""
+    cache_key = cache.make_key("dashboard", "region-heat", variety_id, on_date)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return ok(cached)
+
     if variety_id is None:
         variety_id = db.execute(
             select(Variety.id).order_by(Variety.sort, Variety.id)
         ).scalars().first()
     if variety_id is None:
+        cache.set(cache_key, [], CACHE_TTL_DASHBOARD)
+        response.headers["X-Cache"] = "MISS"
         return ok([])
     pricing.get_variety(db, variety_id)
     anchor = pricing.parse_date(on_date) or pricing.latest_price_date(
         db, variety_id=variety_id
     )
     if not anchor:
+        cache.set(cache_key, [], CACHE_TTL_DASHBOARD)
+        response.headers["X-Cache"] = "MISS"
         return ok([])
 
     price_rows = db.execute(
@@ -310,15 +338,24 @@ def dashboard_region_heat(
                 "level": pricing.level_of(yoy),
             }
         )
+    cache.set(cache_key, items, CACHE_TTL_DASHBOARD)
+    response.headers["X-Cache"] = "MISS"
     return ok(items)
 
 
 @router.get("/category-share")
 def dashboard_category_share(
+    response: Response,
     _perm: object = Depends(require_permission("dashboard:view")),
     db: Session = Depends(get_db),
 ):
     """品类占比：按品类统计记录数占比与均价。"""
+    cache_key = cache.make_key("dashboard", "category-share")
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return ok(cached)
+
     rows = db.execute(
         select(
             Variety.category,
@@ -339,6 +376,8 @@ def dashboard_category_share(
         }
         for row in rows
     ]
+    cache.set(cache_key, items, CACHE_TTL_DASHBOARD)
+    response.headers["X-Cache"] = "MISS"
     return ok(items)
 
 

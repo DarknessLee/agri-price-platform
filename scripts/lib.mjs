@@ -164,6 +164,7 @@ export async function callApi(pathname, { method = 'GET', token, body, headers, 
     body: payload,
     data: payload?.data,
     code: payload?.code == null ? undefined : String(payload.code),
+    headers: response.headers,
   }
 }
 

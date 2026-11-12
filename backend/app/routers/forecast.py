@@ -8,6 +8,8 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
+from .. import cache
+from ..config import CACHE_TTL_PERFORMANCE
 from ..database import get_db
 from ..responses import ok
 from ..security import ApiError, client_ip, require_permission, write_audit
@@ -172,8 +174,18 @@ def forecast_batch_export(
 
 @router.get("/forecast/performance")
 def forecast_performance(
+    response: Response,
     user: Any = Depends(require_permission("forecast:view")),
     db: Session = Depends(get_db),
 ):
-    """预测性能汇总：平均 MAPE、方向准确率、时间序列与品种分布。"""
-    return ok(forecasting.forecast_performance(db))
+    """预测性能汇总：平均 MAPE、方向准确率、时间序列与品种分布（Redis 缓存）。"""
+    cache_key = cache.make_key("forecast", "performance")
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return ok(cached)
+
+    payload = forecasting.forecast_performance(db)
+    cache.set(cache_key, payload, CACHE_TTL_PERFORMANCE)
+    response.headers["X-Cache"] = "MISS"
+    return ok(payload)

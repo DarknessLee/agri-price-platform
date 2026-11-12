@@ -11,6 +11,8 @@ from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import cache
+from ..config import CACHE_TTL_SERIES
 from ..database import get_db
 from ..models import Market, PriceRecord, Region, Variety
 from ..responses import ok, page_args, paged
@@ -121,6 +123,7 @@ def list_prices(
 
 @router.get("/series")
 def price_series(
+    response: Response,
     variety_id: int = Query(..., description="品种ID"),
     region_id: int | None = Query(default=None),
     market_type: str | None = Query(default=None),
@@ -130,7 +133,15 @@ def price_series(
     _perm: object = Depends(require_permission("monitor:view")),
     db: Session = Depends(get_db),
 ):
-    """价格序列（日/周/月聚合）。"""
+    """价格序列（日/周/月聚合，Redis 缓存）。"""
+    cache_key = cache.make_key(
+        "prices", "series", variety_id, region_id, market_type, start, end, granularity
+    )
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return ok(cached)
+
     start_date, end_date = pricing.parse_range(start, end)
     data = pricing.series_data(
         db,
@@ -141,6 +152,8 @@ def price_series(
         end=end_date,
         granularity=granularity,
     )
+    cache.set(cache_key, data, CACHE_TTL_SERIES)
+    response.headers["X-Cache"] = "MISS"
     return ok(data)
 
 

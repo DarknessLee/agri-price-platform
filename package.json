@@ -5,12 +5,14 @@
   "description": "农产品价格监测预测分析平台 V1.0（本地部署与验收工程）",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "infra:up": "node scripts/infra.mjs",
+    "infra:down": "docker compose -f deploy/docker-compose.yml down",
+    "seed": "node scripts/seed.mjs",
     "build": "node scripts/build.mjs",
     "test:api": "node scripts/check-api.mjs",
     "test:e2e": "node scripts/test-e2e.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "db:validate": "node scripts/db-validate.mjs",
-    "seed": "node scripts/seed.mjs",
     "screenshots": "node scripts/screenshots.mjs",
     "gate": "node scripts/gate.mjs"
   },

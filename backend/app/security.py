@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 from datetime import datetime, timedelta
 from typing import Annotated, Callable
@@ -15,6 +16,7 @@ from fastapi import Depends, Header, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import cache
 from .config import SECRET_KEY, TOKEN_EXPIRE_MINUTES, TOKEN_ISSUER
 from .database import get_db
 from .models import AuditLog, RolePermission, User
@@ -70,6 +72,9 @@ def create_token(user: User) -> tuple[str, int]:
         "iss": TOKEN_ISSUER,
         "iat": int(time.time()),
         "exp": int(expire_at.timestamp()),
+        # 每次登录生成唯一令牌编号：同一秒内多次登录不会产生相同令牌，
+        # 退出登录时按令牌指纹加入黑名单也不会误伤其他会话。
+        "jti": secrets.token_hex(8),
     }
     segments = [
         _b64encode(json.dumps(header, separators=(",", ":")).encode()),
@@ -98,6 +103,37 @@ def decode_token(token: str) -> dict:
 
 # ---------------------------- 依赖 ----------------------------
 
+def token_digest(token: str) -> str:
+    """令牌指纹：sha256 十六进制，避免明文令牌落库/落缓存。"""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def blacklist_token(token: str) -> bool:
+    """把令牌指纹写入 Redis 黑名单，TTL 取令牌剩余有效期；Redis 异常降级返回 False。"""
+    try:
+        payload = decode_token(token)
+    except ApiError:
+        return False
+    remaining = int(payload.get("exp", 0)) - int(time.time())
+    if remaining <= 0:
+        return False
+    return cache.set_raw(cache.blacklist_key(token_digest(token)), "1", ttl=remaining)
+
+
+def is_token_blacklisted(token: str) -> bool:
+    """令牌是否已注销；Redis 不可用时返回 False（降级放行）。"""
+    return cache.exists(cache.blacklist_key(token_digest(token)))
+
+
+def revoke_token(authorization: str | None) -> bool:
+    """从 Authorization 头解析令牌并加入黑名单，供退出登录使用。"""
+    try:
+        token = _extract_token(authorization)
+    except ApiError:
+        return False
+    return blacklist_token(token)
+
+
 def _extract_token(authorization: str | None) -> str:
     if not authorization:
         raise ApiError("E4010", "请先登录", 401)
@@ -111,7 +147,10 @@ def get_current_user(
     authorization: Annotated[str | None, Header()] = None,
     db: Session = Depends(get_db),
 ) -> User:
-    payload = decode_token(_extract_token(authorization))
+    token = _extract_token(authorization)
+    payload = decode_token(token)
+    if is_token_blacklisted(token):
+        raise ApiError("E4010", "登录凭证已失效", 401)
     user = db.get(User, int(payload.get("sub", 0)))
     if not user or user.status != "启用":
         raise ApiError("E4010", "账号不存在或已停用", 401)

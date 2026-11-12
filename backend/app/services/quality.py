@@ -141,7 +141,11 @@ def _pending_count(
 
 def issue_type_distribution(db: Session) -> list[dict]:
     """按问题类型的数量分布（归一为四类，含已处理，便于看历史）。"""
-    rows = db.execute(select(QualityIssue.issue_type, func.count(QualityIssue.id))).all()
+    rows = db.execute(
+        select(QualityIssue.issue_type, func.count(QualityIssue.id)).group_by(
+            QualityIssue.issue_type
+        )
+    ).all()
     counts: dict[str, int] = {}
     for issue_type, count in rows:
         counts[_category(issue_type)] = counts.get(_category(issue_type), 0) + int(count)

@@ -18,6 +18,7 @@ from ..security import (
     create_token,
     get_permissions,
     hash_password,
+    revoke_token,
     verify_password,
     write_audit,
 )
@@ -77,6 +78,8 @@ def me(user: CurrentUser, db: Session = Depends(get_db)):
 
 @router.post("/logout")
 def logout(user: CurrentUser, request: Request, db: Session = Depends(get_db)):
+    # 令牌加入 Redis 黑名单（TTL=剩余有效期）；Redis 不可用时静默降级
+    revoke_token(request.headers.get("authorization"))
     write_audit(db, user, "退出", "认证", f"账号 {user.username} 退出登录", client_ip(request))
     return ok({"ok": True})
 

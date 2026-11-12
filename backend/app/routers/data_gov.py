@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import cache
 from ..database import get_db, now
 from ..models import DataSource, ImportTask, PriceRecord, QualityIssue
 from ..responses import ok, page_args, paged
@@ -194,6 +195,7 @@ def sync_source(
         source.status = "正常"
     db.commit()
     db.refresh(source)
+    cache.invalidate("dashboard", "prices", "meta")
     write_audit(
         db, user, "同步", "数据治理", f"同步数据源 {source.name}，共 {count} 条记录", client_ip(request)
     )
@@ -343,6 +345,7 @@ async def import_data(
         source_id=source_id,
         username=user.display_name or user.username,
     )
+    cache.invalidate("dashboard", "prices", "meta")
     write_audit(
         db,
         user,
