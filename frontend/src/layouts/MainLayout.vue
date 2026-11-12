@@ -62,6 +62,7 @@
           <el-icon><Calendar /></el-icon>
           <span>{{ today }}</span>
         </div>
+        <NotificationBell />
         <el-divider direction="vertical" />
         <el-dropdown trigger="click" @command="onUserCommand">
           <div class="user-chip">
@@ -119,6 +120,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import api from '@/api/client'
+import NotificationBell from '@/components/NotificationBell.vue'
 import { useAuthStore } from '@/stores/auth'
 import { FALLBACK_MENUS } from '@/constants/menus'
 import type { MenuNode } from '@/types'

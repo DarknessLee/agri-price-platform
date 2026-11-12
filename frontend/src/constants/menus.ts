@@ -2,6 +2,7 @@ import type { MenuNode } from '@/types'
 
 export const FALLBACK_MENUS: MenuNode[] = [
   { key: 'dashboard', title: '综合驾驶舱', path: '/dashboard', icon: 'Odometer', permission: 'dashboard:view' },
+  { key: 'screen', title: '数据大屏', path: '/screen', icon: 'FullScreen', permission: 'dashboard:view' },
   {
     key: 'monitor',
     title: '价格监测',
@@ -23,6 +24,7 @@ export const FALLBACK_MENUS: MenuNode[] = [
       { key: 'forecast-short', title: '短期预测', path: '/forecast/short', icon: 'Aim', permission: 'forecast:view' },
       { key: 'forecast-batch', title: '批量预测', path: '/forecast/batch', icon: 'Files', permission: 'forecast:view' },
       { key: 'forecast-models', title: '模型管理', path: '/forecast/models', icon: 'Cpu', permission: 'forecast:view' },
+      { key: 'forecast-drift', title: '模型监测', path: '/forecast/drift', icon: 'Monitor', permission: 'forecast:view' },
     ],
   },
   {

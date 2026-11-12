@@ -50,6 +50,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '模型管理', group: '预测分析', permission: 'forecast:view', icon: 'Cpu' },
       },
       {
+        path: 'forecast/drift',
+        name: 'forecast-drift',
+        component: () => import('@/views/forecast/ModelDrift.vue'),
+        meta: { title: '模型监测', group: '预测分析', permission: 'forecast:view', icon: 'Monitor' },
+      },
+      {
         path: 'alert/list',
         name: 'alert-list',
         component: () => import('@/views/alert/AlertList.vue'),
@@ -128,6 +134,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '开放 API', group: '系统管理', icon: 'Connection' },
       },
     ],
+  },
+  {
+    path: '/screen',
+    name: 'screen',
+    component: () => import('@/views/Screen.vue'),
+    meta: { title: '数据大屏', permission: 'dashboard:view' },
   },
   {
     path: '/forbidden',

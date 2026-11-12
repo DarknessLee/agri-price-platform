@@ -1,7 +1,17 @@
 <template>
   <div class="page">
-    <PageHeader title="报告中心" subtitle="按日、周、月生成价格分析报告，支持在线预览与 HTML / Markdown 下载">
+    <PageHeader title="报告中心" subtitle="按日、周、月生成价格分析报告，支持在线预览与 HTML / Markdown / Excel 下载及模板导出">
       <template #actions>
+        <el-dropdown @command="downloadTemplate">
+          <el-button :icon="Download" :loading="templateLoading">下载模板</el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="item in reportTypes" :key="item.key" :command="item.key">
+                {{ item.name }}模板
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button :icon="Refresh" @click="loadReports()">刷新</el-button>
         <el-button v-if="canGenerate" type="primary" :icon="Plus" @click="openCreate">生成报告</el-button>
       </template>
@@ -41,10 +51,11 @@
         <el-table-column label="生成时间" width="160">
           <template #default="scope">{{ fmtDateTime(scope.row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="170" fixed="right">
+        <el-table-column label="操作" width="256" fixed="right">
           <template #default="scope">
             <el-button link type="primary" @click="openDetail(scope.row.id)">查看</el-button>
             <el-button link type="primary" @click="downloadReport(scope.row, 'html')">下载</el-button>
+            <el-button link type="primary" @click="downloadExcel(scope.row)">下载 Excel</el-button>
             <el-button v-if="canGenerate" link type="danger" @click="removeReport(scope.row)">删除</el-button>
           </template>
         </el-table-column>
@@ -110,6 +121,7 @@
           <div class="grow" />
           <el-button size="small" :icon="Download" @click="downloadDetail('html')">下载 HTML</el-button>
           <el-button size="small" @click="downloadDetail('md')">下载 Markdown</el-button>
+          <el-button size="small" @click="downloadDetail('xlsx')">下载 Excel</el-button>
         </div>
         <div v-if="detail" class="report-content" v-html="detail.content_html || '<p>报告正文为空</p>'" />
         <el-empty v-else-if="!detailLoading" description="报告详情加载失败" />
@@ -166,6 +178,7 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = 10
 const loading = ref(false)
+const templateLoading = ref(false)
 const filterType = ref('')
 
 const varieties = ref<DictOption[]>([])
@@ -282,8 +295,8 @@ async function openDetail(id: number) {
   }
 }
 
-async function downloadReport(row: { id: number; title: string }, format: 'html' | 'md') {
-  const ext = format === 'md' ? 'md' : 'html'
+async function downloadReport(row: { id: number; title: string }, format: 'html' | 'md' | 'xlsx') {
+  const ext = format === 'md' ? 'md' : format === 'xlsx' ? 'xlsx' : 'html'
   try {
     await api.download(`/reports/${row.id}/download`, { format }, `${row.title || 'report'}.${ext}`)
   } catch {
@@ -291,7 +304,22 @@ async function downloadReport(row: { id: number; title: string }, format: 'html'
   }
 }
 
-function downloadDetail(format: 'html' | 'md') {
+function downloadExcel(row: { id: number; title: string }) {
+  downloadReport(row, 'xlsx')
+}
+
+async function downloadTemplate(reportType: string) {
+  templateLoading.value = true
+  try {
+    await api.download('/reports/template', { report_type: reportType }, `${typeName(reportType)}模板.xlsx`)
+  } catch {
+    ElMessage.warning('数据服务暂不可用')
+  } finally {
+    templateLoading.value = false
+  }
+}
+
+function downloadDetail(format: 'html' | 'md' | 'xlsx') {
   if (!detail.value) return
   downloadReport(detail.value, format)
 }
