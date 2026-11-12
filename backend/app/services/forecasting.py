@@ -19,7 +19,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import threading
 import warnings
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -33,7 +35,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import MODEL_DIR
-from ..database import now
+from ..database import SessionLocal, now
 from ..models import (
     BacktestRecord,
     ForecastBatch,
@@ -45,8 +47,11 @@ from ..models import (
 )
 from ..security import ApiError
 from . import features as feat
+from . import notification
 
 warnings.filterwarnings("ignore")
+
+logger = logging.getLogger(__name__)
 
 MODEL_KEYS: tuple[str, ...] = ("seasonal", "holt_winters", "gbr", "ensemble")
 BASE_KEYS: tuple[str, ...] = ("seasonal", "holt_winters", "gbr")
@@ -690,7 +695,39 @@ def _serialize_params(key: str, artifact_meta: dict) -> str:
     return json.dumps(_jsonable(artifact_meta), ensure_ascii=False)
 
 
-def train_model(db: Session, variety_id: int, region_id: int, commit: bool = True) -> list[ModelVersion]:
+def _broadcast_training(
+    db: Session,
+    variety_name: str,
+    region_name: str,
+    models: list[ModelVersion],
+) -> None:
+    """训练完成后写一条站内通知；通知失败只记录日志，不影响训练结果。"""
+    try:
+        best = min(
+            (float(model.mape) for model in models if model.mape is not None),
+            default=0.0,
+        )
+        notification.broadcast(
+            db,
+            f"模型训练完成：{variety_name}{region_name}",
+            f"共 {len(models)} 个算法版本，最优 MAPE {best:.2f}%",
+            category="模型",
+            level="低",
+            link="/forecast/models",
+        )
+    except Exception:
+        logger.exception(
+            "模型训练通知发送失败：variety=%s region=%s", variety_name, region_name
+        )
+
+
+def train_model(
+    db: Session,
+    variety_id: int,
+    region_id: int,
+    commit: bool = True,
+    notify: bool = False,
+) -> list[ModelVersion]:
     """训练单个品种×地区的 4 个模型，返回 4 个 ModelVersion（组合模型 active）。"""
     variety, region = _ensure_pair(db, variety_id, region_id)
     matrix = feat.build_training_matrix(db, variety_id, region_id)
@@ -843,6 +880,9 @@ def train_model(db: Session, variety_id: int, region_id: int, commit: bool = Tru
         if other.status == "active":
             other.status = "candidate"
         db.add(other)
+
+    if notify:
+        _broadcast_training(db, variety.name, region.name, models)
 
     if commit:
         db.commit()
@@ -1534,6 +1574,51 @@ def get_backtest(db: Session, model: ModelVersion, window: int = 60) -> dict:
 
 # ============================ 批量预测 ============================
 
+BATCH_QUEUED = "排队中"
+BATCH_RUNNING = "执行中"
+BATCH_DONE = "已完成"
+BATCH_PARTIAL = "部分失败"
+BATCH_FAILED = "失败"
+
+# 后台线程的异常明细（批次数有限，进程内保留最近 100 个批次，不落库）
+_BATCH_ERRORS: dict[int, list[dict]] = {}
+_BATCH_ERRORS_LOCK = threading.Lock()
+_BATCH_ERRORS_LIMIT = 100
+
+
+def batch_progress(done: Any, total: Any) -> int:
+    """进度百分比：已处理条数 / 总条数，取整到 0~100。"""
+    try:
+        done_value = max(0, int(done or 0))
+        total_value = max(0, int(total or 0))
+    except (TypeError, ValueError):
+        return 0
+    if total_value <= 0:
+        return 0
+    return max(0, min(100, int(round(done_value * 100.0 / total_value))))
+
+
+def _remember_batch_errors(batch_id: int, errors: list[dict]) -> None:
+    with _BATCH_ERRORS_LOCK:
+        _BATCH_ERRORS[int(batch_id)] = list(errors)
+        if len(_BATCH_ERRORS) > _BATCH_ERRORS_LIMIT:
+            for key in list(_BATCH_ERRORS.keys())[: len(_BATCH_ERRORS) - _BATCH_ERRORS_LIMIT]:
+                _BATCH_ERRORS.pop(key, None)
+
+
+def batch_errors(batch_id: int) -> list[dict]:
+    with _BATCH_ERRORS_LOCK:
+        return list(_BATCH_ERRORS.get(int(batch_id), []))
+
+
+class _BatchUser:
+    """后台线程中使用的审计身份（不持有数据库会话，避免跨线程使用 ORM 对象）。"""
+
+    def __init__(self, username: str) -> None:
+        self.username = username
+        self.display_name = username
+
+
 def _parse_id_list(raw: Any) -> list[int]:
     if raw is None:
         return []
@@ -1543,6 +1628,34 @@ def _parse_id_list(raw: Any) -> list[int]:
         return [int(item) for item in raw]
     except (TypeError, ValueError):
         raise ApiError("E4001", "品种/地区参数格式不正确", 400)
+
+
+def _resolve_batch_pairs(
+    db: Session, variety_ids: Any, region_ids: Any
+) -> list[tuple[int, int]]:
+    """解析批量预测的品种×地区组合，缺省为全部启用项。"""
+    vids = _parse_id_list(variety_ids)
+    rids = _parse_id_list(region_ids)
+    if not vids:
+        vids = [
+            int(v)
+            for v in db.execute(
+                select(Variety.id).where(Variety.enabled.is_(True)).order_by(Variety.id)
+            ).scalars()
+        ]
+    if not rids:
+        rids = [
+            int(r)
+            for r in db.execute(
+                select(Region.id).where(Region.enabled.is_(True)).order_by(Region.id)
+            ).scalars()
+        ]
+    if not vids or not rids:
+        raise ApiError("E4001", "请先选择品种与地区", 400)
+    pairs = [(v, r) for v in vids for r in rids]
+    if len(pairs) > MAX_BATCH:
+        raise ApiError("E4001", f"单次批量预测不超过 {MAX_BATCH} 条", 400)
+    return pairs
 
 
 def run_forecast_batch(
@@ -1558,15 +1671,11 @@ def run_forecast_batch(
     horizon = _clamp_horizon(horizon)
     vids = _parse_id_list(variety_ids)
     rids = _parse_id_list(region_ids)
-    if not vids:
-        vids = [int(v) for v in db.execute(select(Variety.id).where(Variety.enabled.is_(True)).order_by(Variety.id)).scalars()]
-    if not rids:
-        rids = [int(r) for r in db.execute(select(Region.id).where(Region.enabled.is_(True)).order_by(Region.id)).scalars()]
-    if not vids or not rids:
-        raise ApiError("E4001", "请先选择品种与地区", 400)
-    pairs = [(v, r) for v in vids for r in rids]
-    if len(pairs) > MAX_BATCH:
-        raise ApiError("E4001", f"单次批量预测不超过 {MAX_BATCH} 条", 400)
+    pairs = _resolve_batch_pairs(db, vids or None, rids or None)
+    if len(vids) == 0:
+        vids = sorted({v for v, _r in pairs})
+    if len(rids) == 0:
+        rids = sorted({r for _v, r in pairs})
 
     created_by = (getattr(user, "username", None) or "system") if user else "system"
     batch = ForecastBatch(
@@ -1575,7 +1684,7 @@ def run_forecast_batch(
         horizon=horizon,
         total=len(pairs),
         done=0,
-        status="处理中",
+        status=BATCH_RUNNING,
         created_by=created_by,
         created_at=now(),
     )
@@ -1626,11 +1735,11 @@ def run_forecast_batch(
             )
     batch.done = done
     if done == batch.total:
-        batch.status = "已完成"
+        batch.status = BATCH_DONE
     elif done > 0:
-        batch.status = "部分完成"
+        batch.status = BATCH_PARTIAL
     else:
-        batch.status = "失败"
+        batch.status = BATCH_FAILED
     db.add(batch)
     if commit:
         db.commit()
@@ -1646,6 +1755,149 @@ def run_forecast_batch(
     }
 
 
+def create_forecast_batch(
+    db: Session,
+    user: Any,
+    variety_ids: Any = None,
+    region_ids: Any = None,
+    horizon: int = DEFAULT_HORIZON,
+    model_key: str | None = None,
+    commit: bool = True,
+) -> dict:
+    """创建批量预测批次并交给后台线程执行，立即返回排队中的批次摘要。"""
+    horizon = _clamp_horizon(horizon)
+    if model_key is not None and str(model_key) not in MODEL_KEYS:
+        raise ApiError("E4001", f"不支持的模型标识：{model_key}", 400)
+    pairs = _resolve_batch_pairs(db, variety_ids, region_ids)
+    created_by = (getattr(user, "username", None) or "system") if user else "system"
+    batch = ForecastBatch(
+        variety_ids=",".join(str(v) for v in sorted({v for v, _r in pairs})),
+        region_ids=",".join(str(r) for r in sorted({r for _v, r in pairs})),
+        horizon=horizon,
+        total=len(pairs),
+        done=0,
+        status=BATCH_QUEUED,
+        created_by=created_by,
+        created_at=now(),
+    )
+    db.add(batch)
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    batch_id = int(batch.id)
+    thread = threading.Thread(
+        target=_run_batch_worker,
+        args=(batch_id, pairs, horizon, model_key, created_by),
+        name=f"forecast-batch-{batch_id}",
+        daemon=True,
+    )
+    thread.start()
+    return {
+        "batch_id": batch_id,
+        "total": len(pairs),
+        "status": BATCH_QUEUED,
+        "progress": 0,
+        "created_at": batch.created_at.strftime("%Y-%m-%dT%H:%M:%S") if batch.created_at else "",
+    }
+
+
+def _run_batch_worker(
+    batch_id: int,
+    pairs: list[tuple[int, int]],
+    horizon: int,
+    model_key: str | None,
+    created_by: str,
+) -> None:
+    """后台线程：逐组合预测并增量提交，保证前端轮询能看到实时进度。"""
+    session = SessionLocal()
+    errors: list[dict] = []
+    success = 0
+    total = len(pairs)
+    try:
+        batch = session.get(ForecastBatch, int(batch_id))
+        if batch is None:  # pragma: no cover - 批次被删除
+            return
+        batch.status = BATCH_RUNNING
+        session.commit()
+        varieties, regions = _name_maps(session)
+        user = _BatchUser(created_by)
+        for variety_id, region_id in pairs:
+            try:
+                payload = run_forecast(
+                    session, user, variety_id, region_id, horizon, model_key, commit=False
+                )
+                last = payload["forecast"][-1] if payload["forecast"] else None
+                session.add(
+                    ForecastBatchItem(
+                        batch_id=batch_id,
+                        variety_id=int(variety_id),
+                        region_id=int(region_id),
+                        point=float(last["point"]) if last else 0.0,
+                        lower=float(last["lower"]) if last else 0.0,
+                        upper=float(last["upper"]) if last else 0.0,
+                        direction=payload["summary"]["trend"],
+                        mape=float(payload["model"].get("mape") or 0),
+                    )
+                )
+                session.commit()
+                success += 1
+            except Exception as exc:  # pragma: no cover - 单条失败不拖垮批次
+                session.rollback()
+                logger.exception(
+                    "批量预测单条失败：batch_id=%s 品种=%s 地区=%s", batch_id, variety_id, region_id
+                )
+                errors.append(
+                    {
+                        "variety_id": int(variety_id),
+                        "region_id": int(region_id),
+                        "variety": varieties.get(int(variety_id), ""),
+                        "region": regions.get(int(region_id), ""),
+                        "message": getattr(exc, "message", None) or f"预测失败：{exc}",
+                    }
+                )
+            batch = session.get(ForecastBatch, int(batch_id))
+            if batch is None:  # pragma: no cover - 批次被删除
+                return
+            batch.done = success + len(errors)
+            session.commit()
+
+        batch = session.get(ForecastBatch, int(batch_id))
+        if batch is None:  # pragma: no cover - 批次被删除
+            return
+        batch.done = total
+        if success == total and not errors:
+            batch.status = BATCH_DONE
+        elif success > 0:
+            batch.status = BATCH_PARTIAL
+        else:
+            batch.status = BATCH_FAILED
+        session.commit()
+        _remember_batch_errors(batch_id, errors)
+    except Exception:  # pragma: no cover - 后台任务整体异常
+        logger.exception("批量预测后台任务异常：batch_id=%s", batch_id)
+        try:
+            session.rollback()
+            batch = session.get(ForecastBatch, int(batch_id))
+            if batch is not None:
+                batch.status = BATCH_FAILED
+                session.commit()
+        except Exception:
+            logger.exception("批量预测失败状态回写失败：batch_id=%s", batch_id)
+            session.rollback()
+    finally:
+        session.close()
+
+
+_STATUS_ALIASES = {"处理中": BATCH_RUNNING, "部分完成": BATCH_PARTIAL}
+
+
+def normalize_batch_status(status: Any) -> str:
+    """兼容历史批次状态写法，统一为契约枚举。"""
+    text = str(status or "").strip()
+    return _STATUS_ALIASES.get(text, text or BATCH_QUEUED)
+
+
 def get_batch_detail(db: Session, batch_id: int) -> dict:
     batch = db.get(ForecastBatch, int(batch_id))
     if batch is None:
@@ -1658,9 +1910,10 @@ def get_batch_detail(db: Session, batch_id: int) -> dict:
     ).scalars().all()
     return {
         "batch_id": batch.id,
-        "status": batch.status,
-        "done": batch.done,
-        "total": batch.total,
+        "status": normalize_batch_status(batch.status),
+        "progress": batch_progress(batch.done, batch.total),
+        "done": int(batch.done or 0),
+        "total": int(batch.total or 0),
         "horizon": batch.horizon,
         "created_by": batch.created_by,
         "created_at": batch.created_at.strftime("%Y-%m-%dT%H:%M:%S") if batch.created_at else "",
@@ -1678,6 +1931,7 @@ def get_batch_detail(db: Session, batch_id: int) -> dict:
             }
             for item in items
         ],
+        "errors": batch_errors(batch.id),
     }
 
 
@@ -1708,9 +1962,10 @@ def batch_list(db: Session, limit: int = 20) -> list[dict]:
         {
             "batch_id": batch.id,
             "horizon": batch.horizon,
-            "total": batch.total,
-            "done": batch.done,
-            "status": batch.status,
+            "total": int(batch.total or 0),
+            "done": int(batch.done or 0),
+            "progress": batch_progress(batch.done, batch.total),
+            "status": normalize_batch_status(batch.status),
             "created_by": batch.created_by,
             "created_at": batch.created_at.strftime("%Y-%m-%dT%H:%M:%S") if batch.created_at else "",
         }
@@ -1820,10 +2075,29 @@ def train_models_for(
         raise ApiError("E4001", f"不支持的模型标识：{model_key}", 400)
     if variety_id and region_id:
         _ensure_pair(db, variety_id, region_id)
-        return train_model(db, int(variety_id), int(region_id), commit=commit)
-    return ensure_active_models(
+        return train_model(db, int(variety_id), int(region_id), commit=commit, notify=commit)
+    models = ensure_active_models(
         db,
         variety_ids=[int(variety_id)] if variety_id else None,
         region_ids=[int(region_id)] if region_id else None,
         commit=commit,
     )
+    if commit and models:
+        try:
+            best = min(
+                (float(model.mape) for model in models if model.mape is not None),
+                default=0.0,
+            )
+            notification.broadcast(
+                db,
+                "模型训练完成：全部启用组合",
+                f"共 {len(models)} 个算法版本，最优 MAPE {best:.2f}%",
+                category="模型",
+                level="低",
+                link="/forecast/models",
+            )
+            db.commit()
+        except Exception:
+            logger.exception("批量模型训练通知发送失败")
+            db.rollback()
+    return models

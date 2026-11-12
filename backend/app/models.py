@@ -383,3 +383,56 @@ class AuditLog(Base):
     detail: Mapped[str] = mapped_column(String(255), default="")
     ip: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Notification(Base):
+    """站内通知：预警产生/处置、导入完成、报告生成、任务执行等事件的闭环提醒。"""
+
+    __tablename__ = "sys_notification"
+    __table_args__ = (
+        Index("ix_notify_user_time", "user_id", "created_at"),
+        Index("ix_notify_read", "read_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=0)
+    username: Mapped[str] = mapped_column(String(64), default="")
+    title: Mapped[str] = mapped_column(String(128))
+    content: Mapped[str] = mapped_column(String(255), default="")
+    category: Mapped[str] = mapped_column(String(32), default="系统")
+    level: Mapped[str] = mapped_column(String(8), default="中")
+    link: Mapped[str] = mapped_column(String(128), default="")
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class OpenApiClient(Base):
+    """开放 API 调用方：密钥、限流配置与累计调用统计。"""
+
+    __tablename__ = "open_api_client"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    client_key: Mapped[str] = mapped_column(String(64), unique=True)
+    secret: Mapped[str] = mapped_column(String(128))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    rate_limit: Mapped[int] = mapped_column(Integer, default=60)
+    call_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_call_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    description: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class OpenApiCall(Base):
+    """开放 API 调用流水（按需保留近 7 天，用于调用量与耗时统计）。"""
+
+    __tablename__ = "open_api_call"
+    __table_args__ = (Index("ix_open_call_time", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_id: Mapped[int] = mapped_column(Integer, default=0)
+    path: Mapped[str] = mapped_column(String(128), default="")
+    method: Mapped[str] = mapped_column(String(8), default="GET")
+    status: Mapped[int] = mapped_column(Integer, default=200)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

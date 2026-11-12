@@ -65,5 +65,20 @@ SECRET_KEY = os.getenv("AGRI_SECRET_KEY", "agri-price-platform-local-secret-2026
 TOKEN_EXPIRE_MINUTES = int(os.getenv("AGRI_TOKEN_EXPIRE_MINUTES", "720"))
 TOKEN_ISSUER = "agri-price-platform"
 
+# ---------------------------------------------------------------- 增强能力
+# 开放 API：未单独配置的调用方默认每分钟限流次数、调用流水保留天数
+OPEN_API_RATE_LIMIT = int(os.getenv("AGRI_OPEN_API_RATE_LIMIT", "60"))
+OPEN_API_CALL_RETENTION_DAYS = int(os.getenv("AGRI_OPEN_API_CALL_RETENTION_DAYS", "7"))
+# 模型漂移监控：PSI 分箱数、判定阈值（<watch 平稳，<drift 关注，否则漂移）
+DRIFT_BINS = int(os.getenv("AGRI_DRIFT_BINS", "10"))
+DRIFT_PSI_WATCH = float(os.getenv("AGRI_DRIFT_PSI_WATCH", "0.1"))
+DRIFT_PSI_DRIFT = float(os.getenv("AGRI_DRIFT_PSI_DRIFT", "0.25"))
+DRIFT_WINDOW_DAYS = int(os.getenv("AGRI_DRIFT_WINDOW_DAYS", "90"))
+DRIFT_BASELINE_DAYS = int(os.getenv("AGRI_DRIFT_BASELINE_DAYS", "180"))
+# 预警处置时效：SLA 目标小时数（超时计为逾期）
+ALERT_SLA_HOURS = int(os.getenv("AGRI_ALERT_SLA_HOURS", "24"))
+# 站内通知保留天数
+NOTIFICATION_RETENTION_DAYS = int(os.getenv("AGRI_NOTIFICATION_RETENTION_DAYS", "90"))
+
 # 默认管理员账号（首次启动时若库为空则自动初始化）
 DEFAULT_ADMIN = ("admin", "Admin@2026")

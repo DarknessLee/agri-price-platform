@@ -1,4 +1,4 @@
-﻿"""种子数据生成：主数据、三年日频价格、特征、预警、报告、治理与审计。
+"""种子数据生成：主数据、三年日频价格、特征、预警、报告、治理与审计。
 
 所有数据由固定随机种子（20261112）可重建；脚本可重复执行：
     python -m app.seed --reset          # 清空业务数据后重建
@@ -28,6 +28,9 @@ from .models import (
     ImportTask,
     Market,
     Menu,
+    Notification,
+    OpenApiCall,
+    OpenApiClient,
     Permission,
     PriceRecord,
     QualityIssue,
@@ -157,6 +160,7 @@ USERS = [
 MENUS = [
     # (key, title, path, icon, permission, parent, sort)
     ("dashboard", "综合驾驶舱", "/dashboard", "Odometer", "dashboard:view", "", 10),
+    ("screen", "数据大屏", "/screen", "FullScreen", "", "", 12),
     ("monitor", "价格监测", "/monitor", "TrendCharts", "monitor:view", "", 20),
     ("monitor-prices", "价格监测", "/monitor/prices", "TrendCharts", "", "monitor", 21),
     ("monitor-analysis", "监测分析", "/monitor/analysis", "DataLine", "", "monitor", 22),
@@ -164,6 +168,7 @@ MENUS = [
     ("forecast-short", "短期预测", "/forecast/short", "MagicStick", "", "forecast", 31),
     ("forecast-batch", "批量预测", "/forecast/batch", "Files", "", "forecast", 32),
     ("forecast-models", "模型管理", "/forecast/models", "Cpu", "", "forecast", 33),
+    ("forecast-drift", "模型监测", "/forecast/drift", "Monitor", "", "forecast", 34),
     ("alert", "预警管理", "/alert", "Bell", "alert:view", "", 40),
     ("alert-list", "预警列表", "/alert/list", "Bell", "", "alert", 41),
     ("alert-rules", "预警规则", "/alert/rules", "SetUp", "", "alert", 42),
@@ -493,6 +498,132 @@ def seed_governance(db: Session) -> None:
     db.commit()
 
 
+# ---------------------------- 通知中心与开放 API ----------------------------
+
+# (标题, 内容, 分类, 等级, 关联页面, 分钟前, 是否已读)
+NOTIFICATIONS = [
+    ("生猪价格低位预警", "生猪·北京 批发均价连续 5 日低于近一年 6% 分位，已触发低位预警，请核实。",
+     "预警", "高", "/alert/list", 26, False),
+    ("大白菜价格波动预警", "大白菜·山东 日环比波动 8.6%，超过波动率阈值，建议关注产地天气。",
+     "预警", "中", "/alert/list", 95, False),
+    ("数据导入完成", "全国批发价格_20261109.csv 导入完成：成功 320 条，无异常行。",
+     "数据", "低", "/data/import", 180, False),
+    ("模型重训完成", "30 组组合模型已按最新口径重训完成，平均 MAPE 4.22%，方向准确率 77.89%。",
+     "模型", "中", "/forecast/models", 320, True),
+    ("周报生成完成", "2026 年第 45 周价格监测周报已生成，可在报告中心查看与下载。",
+     "报告", "低", "/report", 520, True),
+    ("预警处置提醒", "鸡蛋·广东 同比异常预警 48 小时未处置，请及时闭环。",
+     "预警", "高", "/alert/list", 760, False),
+    ("数据质量巡检", "本轮巡检发现 48 条质量问题（疑似异常 329 条中的抽样核查），待处理 32 条。",
+     "数据", "中", "/data/quality", 1100, True),
+    ("调度任务执行完成", "价格数据同步任务执行完成，新增 240 条批发价格记录。",
+     "任务", "低", "/admin/tasks", 1500, True),
+    ("情景推演报告已归档", "寒潮冲击下大白菜价格情景推演结果已归档，预计价格上行 9.32%。",
+     "情景", "低", "/scenario", 2100, True),
+    ("账号安全提醒", "检测到账号 analyst02 在新设备登录，如非本人操作请及时修改密码。",
+     "安全", "中", "/admin/audit", 2600, False),
+]
+
+# (名称, client_key, secret, 启用, 限流/分钟, 说明)
+OPEN_API_CLIENTS = [
+    ("省级农产品数据交换平台", "ak_province_exchange_2f7c1a", "sk_province_9d4c7b21e8f0", True, 120,
+     "省农业农村厅数据交换，按小时同步价格与预警数据"),
+    ("农信社行情推送服务", "ak_bank_market_8b2d4e", "sk_bank_5a1c9f33d7e2", True, 60,
+     "面向金融机构推送品种行情与预测摘要"),
+    ("合作社移动端", "ak_coop_mobile_6c1e9a", "sk_coop_4f8b2d66a1c3", False, 30,
+     "合作社移动端试点，当前暂停调用"),
+]
+
+OPEN_API_PATHS = [
+    ("/api/open/v1/prices", 0.52),
+    ("/api/open/v1/forecast", 0.22),
+    ("/api/open/v1/alerts", 0.14),
+    ("/api/open/v1/reports", 0.07),
+    ("/api/open/v1/metrics", 0.05),
+]
+
+
+def seed_engagement(db: Session) -> None:
+    """通知中心、开放 API 调用方与近 7 天调用流水。"""
+    rng = np.random.default_rng(RNG_SEED + 11)
+
+    # 通知：分派给管理员、分析员、运营员，保留未读与已读混合状态
+    user_ids = [1, 2, 3, 4]
+    for idx, (title, content, category, level, link, minutes_ago, read) in enumerate(NOTIFICATIONS):
+        user_id = user_ids[idx % len(user_ids)]
+        created = NOW - timedelta(minutes=minutes_ago)
+        db.add(Notification(
+            user_id=user_id,
+            username=USERS[user_id - 1][0] if user_id - 1 < len(USERS) else "",
+            title=title,
+            content=content,
+            category=category,
+            level=level,
+            link=link,
+            read_at=created + timedelta(minutes=30) if read else None,
+            created_at=created,
+        ))
+
+    # 开放 API 调用方
+    for name, client_key, secret, enabled, rate_limit, description in OPEN_API_CLIENTS:
+        db.add(OpenApiClient(
+            name=name,
+            client_key=client_key,
+            secret=secret,
+            enabled=enabled,
+            rate_limit=rate_limit,
+            call_count=0,
+            last_call_at=None,
+            description=description,
+            created_at=NOW - timedelta(days=30),
+        ))
+    db.commit()
+
+    # 近 7 天调用流水：工作日调用多、凌晨调用少
+    clients = db.execute(select(OpenApiClient).order_by(OpenApiClient.id)).scalars().all()
+    paths = [item[0] for item in OPEN_API_PATHS]
+    weights = np.array([item[1] for item in OPEN_API_PATHS], dtype=float)
+    weights = weights / weights.sum()
+    total_calls = 0
+    for client in clients:
+        if not client.enabled:
+            continue
+        base = 26 if client.rate_limit >= 100 else 18
+        for day_offset in range(7, 0, -1):
+            day_time = NOW - timedelta(days=day_offset)
+            weekday_factor = 0.45 if day_time.weekday() >= 5 else 1.0
+            count = int(max(1, rng.integers(base - 8, base + 8) * weekday_factor))
+            for _ in range(count):
+                path = str(rng.choice(paths, p=weights))
+                elapsed = int(max(4, rng.normal(24, 9)))
+                roll = rng.random()
+                status = 429 if roll < 0.02 else (500 if roll < 0.025 else 200)
+                created = day_time.replace(
+                    hour=int(rng.integers(7, 22)),
+                    minute=int(rng.integers(0, 60)),
+                    second=int(rng.integers(0, 60)),
+                )
+                db.add(OpenApiCall(
+                    client_id=client.id,
+                    path=path,
+                    method="GET",
+                    status=status,
+                    elapsed_ms=elapsed,
+                    created_at=created,
+                ))
+                total_calls += 1
+        client.call_count = int(
+            db.scalar(
+                select(func.count()).select_from(OpenApiCall).where(OpenApiCall.client_id == client.id)
+            )
+            or 0
+        )
+        client.last_call_at = db.scalar(
+            select(func.max(OpenApiCall.created_at)).where(OpenApiCall.client_id == client.id)
+        )
+    db.commit()
+
+
 # ---------------------------- 预警与报告 ----------------------------
 
 def seed_alert_rules(db: Session, prices: pd.DataFrame, features: pd.DataFrame) -> list[AlertRule]:
@@ -633,12 +764,14 @@ def seed_all(db: Session, with_models: bool = True) -> dict:
     seed_prices(db, prices, features)
     seed_governance(db)
     seed_alert_rules(db, prices, features)
+    seed_engagement(db)
     seed_derived(db, with_models=with_models)
 
     stats = {t: int(db.scalar(select(func.count()).select_from(m)) or 0) for t, m in [
         ("varieties", Variety), ("regions", Region), ("markets", Market), ("users", User),
         ("prices", PriceRecord), ("features", FeatureRecord), ("alerts", AlertRecord),
-        ("reports", Report), ("audit_logs", AuditLog),
+        ("reports", Report), ("audit_logs", AuditLog), ("notifications", Notification),
+        ("api_clients", OpenApiClient), ("api_calls", OpenApiCall),
     ]}
     print("[seed] 数据统计：" + json.dumps(stats, ensure_ascii=False))
     return stats

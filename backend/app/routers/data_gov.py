@@ -15,7 +15,7 @@ from ..database import get_db, now
 from ..models import DataSource, ImportTask, PriceRecord, QualityIssue
 from ..responses import ok, page_args, paged
 from ..security import ApiError, CurrentUser, client_ip, require_permission, write_audit
-from ..services import ingest, quality
+from ..services import ingest, notification, quality
 
 router = APIRouter(tags=["数据治理"])
 
@@ -346,6 +346,18 @@ async def import_data(
         username=user.display_name or user.username,
     )
     cache.invalidate("dashboard", "prices", "meta")
+    try:
+        notification.broadcast(
+            db,
+            f"数据导入完成：{filename}",
+            f"成功 {result['rows_ok']} 条，失败 {result['rows_error']} 条，跳过 {result['rows_skipped']} 条",
+            category="数据",
+            level="中" if result.get("rows_error") else "低",
+            link="/data/import",
+            commit=True,
+        )
+    except Exception:  # 通知不影响导入主流程
+        db.rollback()
     write_audit(
         db,
         user,

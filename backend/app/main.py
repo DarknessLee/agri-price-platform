@@ -83,13 +83,28 @@ def _include_routers() -> None:
         forecast,
         meta,
         model_mgmt,
+        notifications,
         open_api,
         prices,
         reports,
         scenarios,
     )
 
-    for module in (auth, meta, dashboard, prices, forecast, model_mgmt, alerts, scenarios, reports, data_gov, admin, open_api):
+    for module in (
+        auth,
+        meta,
+        dashboard,
+        prices,
+        forecast,
+        model_mgmt,
+        alerts,
+        scenarios,
+        reports,
+        data_gov,
+        admin,
+        notifications,
+        open_api,
+    ):
         app.include_router(module.router, prefix="/api")
 
 

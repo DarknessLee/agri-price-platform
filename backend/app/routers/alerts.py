@@ -76,6 +76,16 @@ def alerts_statistics(
     return ok(alerting.stats(db))
 
 
+@router.get("/alerts/sla")
+def alerts_sla(
+    days: int = Query(default=30, ge=1, le=180),
+    user: Any = Depends(require_permission("alert:view")),
+    db: Session = Depends(get_db),
+):
+    """预警处置时效（SLA）：平均处置时长、及时率、超期未处置与按级别/地区/趋势分布。"""
+    return ok(alerting.sla_stats(db, days))
+
+
 @router.get("/alerts/export")
 def alerts_export(
     status: str | None = Query(default=None),

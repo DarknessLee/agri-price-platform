@@ -84,6 +84,7 @@ export const ROUTES = [
   { path: '/forecast/short', title: '短期预测' },
   { path: '/forecast/batch', title: '批量预测' },
   { path: '/forecast/models', title: '模型管理' },
+  { path: '/forecast/drift', title: '模型监测' },
   { path: '/alert/list', title: '预警信息' },
   { path: '/alert/rules', title: '预警规则' },
   { path: '/scenario', title: '情景推演' },
@@ -97,4 +98,5 @@ export const ROUTES = [
   { path: '/admin/audit', title: '操作审计' },
   { path: '/admin/tasks', title: '任务调度' },
   { path: '/open-api', title: '开放 API' },
+  { path: '/screen', title: '数据大屏' },
 ]

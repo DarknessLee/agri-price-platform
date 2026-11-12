@@ -11,7 +11,7 @@ from ..database import get_db
 from ..models import Region, Variety
 from ..responses import ok
 from ..security import ApiError, client_ip, require_permission, write_audit
-from ..services import forecasting
+from ..services import forecasting, governance
 
 router = APIRouter(tags=["模型管理"])
 
@@ -70,6 +70,16 @@ def models_list(
 ):
     """模型列表，可按品种 / 地区 / 模型标识筛选。"""
     return ok(forecasting.list_models(db, variety_id, region_id, key))
+
+
+@router.get("/models/drift")
+def models_drift(
+    window: int = Query(default=90),
+    user: Any = Depends(require_permission("forecast:view")),
+    db: Session = Depends(get_db),
+):
+    """模型漂移监控：特征分布 PSI、近期回测 MAPE 与漂移等级（结果缓存 120 秒）。"""
+    return ok(governance.model_drift(db, window))
 
 
 @router.get("/models/compare")

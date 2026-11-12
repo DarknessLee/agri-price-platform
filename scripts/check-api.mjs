@@ -558,7 +558,94 @@ print("cleaned")
     checker.check('开放 API 未携带 token 被拒绝', openNoToken.code === 'E4010', `code=${openNoToken.code}`)
   })
 
-  // ---------- 14. 分页与错误处理 ----------
+  // ---------- 14. 增强能力（模型治理 / 通知 / SLA / 开放 API 治理） ----------
+  await section('增强能力：模型治理与批量异步', async () => {
+    const drift = ok(
+      'GET /api/models/drift 返回漂移监控结果',
+      await callApi('/api/models/drift?window=90', { token: analystAuth.token, timeout: 180000 }),
+      (d) => Array.isArray(d?.items) && Boolean(d?.summary),
+    )
+    checker.check('漂移汇总含 总数/平稳/关注/漂移', Boolean(drift?.summary && drift.summary.total > 0 && ['stable', 'watch', 'drifted'].every((k) => Number(drift.summary[k]) >= 0)), JSON.stringify(drift?.summary))
+    const driftItem = drift?.items?.[0]
+    checker.check('漂移明细含 PSI 与等级', Boolean(driftItem && Number(driftItem.psi) >= 0 && ['平稳', '关注', '漂移'].includes(driftItem.drift_level)), JSON.stringify(driftItem)?.slice(0, 200))
+
+    const asyncBatch = await callApi('/api/forecast/batch', { method: 'POST', token: analystAuth.token, body: { variety_ids: [varietyId], region_ids: [regionId], horizon: 7 } })
+    checker.check('批量预测立即返回（异步排队）', asyncBatch.code === '0' && Boolean(asyncBatch.data?.batch_id) && Number(asyncBatch.data?.progress) === 0, JSON.stringify(asyncBatch.body)?.slice(0, 200))
+    const asyncId = asyncBatch.data?.batch_id
+    let asyncDetail = null
+    for (let i = 0; i < 120; i += 1) {
+      asyncDetail = (await callApi(`/api/forecast/batch/${asyncId}`, { token: analystAuth.token })).data
+      if (asyncDetail && asyncDetail.status === '已完成') break
+      await sleep(1000)
+    }
+    checker.check('批量任务轮询至完成且进度 100', asyncDetail?.status === '已完成' && Number(asyncDetail?.progress) === 100, `status=${asyncDetail?.status} progress=${asyncDetail?.progress}`)
+  })
+
+  await section('增强能力：报告导出与通知中心', async () => {
+    const reports = ok('GET /api/reports 返回报告列表', await callApi('/api/reports?page=1&page_size=5', { token: analystAuth.token }), (d) => d?.list?.length > 0)
+    const reportId = reports?.list?.[0]?.id
+    if (reportId) {
+      const xlsx = await fetch(`${BASE_URL}/api/reports/${reportId}/download?format=xlsx`, { headers: { Authorization: `Bearer ${analystAuth.token}` } })
+      const buf = Buffer.from(await xlsx.arrayBuffer())
+      const type = xlsx.headers.get('content-type') || ''
+      checker.check('报告可导出 Excel（xlsx 文件头 PK）', xlsx.status === 200 && /spreadsheet/.test(type) && buf.length > 4000 && buf[0] === 0x50 && buf[1] === 0x4b, `status=${xlsx.status} type=${type} bytes=${buf.length}`)
+    }
+    const template = await fetch(`${BASE_URL}/api/reports/template?report_type=daily`, { headers: { Authorization: `Bearer ${analystAuth.token}` } })
+    const tplBuf = Buffer.from(await template.arrayBuffer())
+    checker.check('报告模板可下载（xlsx）', template.status === 200 && tplBuf.length > 2000 && tplBuf[0] === 0x50, `status=${template.status} bytes=${tplBuf.length}`)
+
+    const notifications = ok('GET /api/notifications 返回通知列表', await callApi('/api/notifications?page=1&page_size=10', { token: adminAuth.token }), (d) => Array.isArray(d?.list) && d?.unread !== undefined)
+    checker.check('通知列表包含标题/分类/已读状态', notifications?.list?.length >= 1 && Boolean(notifications.list[0].title && notifications.list[0].category && notifications.list[0].is_read !== undefined), JSON.stringify(notifications?.list?.[0])?.slice(0, 200))
+    ok('GET /api/notifications/summary 返回未读汇总', await callApi('/api/notifications/summary', { token: adminAuth.token }), (d) => Number(d?.unread) >= 0)
+    ok('POST /api/notifications/read-all 全部标记已读', await callApi('/api/notifications/read-all', { method: 'POST', token: adminAuth.token, body: {} }), (d) => d?.updated !== undefined)
+  })
+
+  await section('增强能力：预警处置时效', async () => {
+    const sla = ok(
+      'GET /api/alerts/sla 返回处置时效',
+      await callApi('/api/alerts/sla?days=30', { token: operatorAuth.token }),
+      (d) => d?.sla_hours !== undefined && d?.within_sla_rate !== undefined,
+    )
+    checker.check('SLA 含平均处置时长/按期率/逾期未闭环', Boolean(sla && Number(sla.sla_hours) === 24 && Number(sla.avg_handle_hours) >= 0 && Array.isArray(sla.by_level)), JSON.stringify(sla)?.slice(0, 200))
+  })
+
+  await section('增强能力：开放 API 密钥与限流', async () => {
+    const clients = ok('GET /api/open-clients 返回调用方列表', await callApi('/api/open-clients', { token: adminAuth.token }), (d) => Array.isArray(d) && d.length >= 3)
+    checker.check('调用方含 client_key 与限流配置', Boolean(clients?.[0]?.client_key && clients?.[0]?.rate_limit !== undefined))
+    checker.check('调用方密钥已掩码（不返回明文 secret）', !String(clients?.[0]?.secret || '').startsWith('sk_'), `secret=${clients?.[0]?.secret}`)
+
+    const created = await callApi('/api/open-clients', { method: 'POST', token: adminAuth.token, body: { name: `门禁校验调用方-${Date.now()}`, rate_limit: 2, description: '五道门禁自动创建，用于校验密钥鉴权与限流' } })
+    checker.check('POST /api/open-clients 创建调用方并返回明文密钥', created.code === '0' && Boolean(created.data?.client_key && created.data?.secret), JSON.stringify(created.body)?.slice(0, 200))
+    const clientId = created.data?.id
+    const clientKey = created.data?.client_key
+
+    if (clientKey) {
+      const viaKey = await callApi('/api/open/v1/metrics', { headers: { 'X-Api-Key': clientKey } })
+      checker.check('X-Api-Key 可访问开放 API', viaKey.code === '0' && Number(viaKey.data?.variety_count) === 5, `code=${viaKey.code}`)
+      const badKey = await callApi('/api/open/v1/metrics', { headers: { 'X-Api-Key': 'ak_invalid_key_for_gate' } })
+      checker.check('无效 X-Api-Key 被拒绝（E4010）', badKey.code === 'E4010', `code=${badKey.code}`)
+      let limited = null
+      for (let i = 0; i < 6; i += 1) {
+        const res = await callApi('/api/open/v1/metrics', { headers: { 'X-Api-Key': clientKey } })
+        if (res.status === 429 || res.code === 'E4290') {
+          limited = res
+          break
+        }
+      }
+      checker.check('超过限流阈值返回 429（E4290）', Boolean(limited) && limited.code === 'E4290', `code=${limited?.code} status=${limited?.status}`)
+    }
+
+    if (clientId) {
+      ok('GET /api/open-clients/{id}/usage 返回调用统计', await callApi(`/api/open-clients/${clientId}/usage?days=7`, { token: analystAuth.token }), (d) => Array.isArray(d?.days) && d?.total !== undefined)
+      ok('POST /api/open-clients/{id}/rotate 轮换密钥', await callApi(`/api/open-clients/${clientId}/rotate`, { method: 'POST', token: adminAuth.token }), (d) => Boolean(d?.secret && d?.client_key))
+      ok('DELETE /api/open-clients/{id} 删除调用方', await callApi(`/api/open-clients/${clientId}`, { method: 'DELETE', token: adminAuth.token }), (d) => d?.deleted === true || d?.id === clientId)
+    }
+
+    const denied = await callApi('/api/open-clients', { token: viewerAuth.token })
+    checker.check('观察员访问调用方管理被拒绝（E4030）', denied.code === 'E4030', `code=${denied.code}`)
+  })
+
+  // ---------- 15. 分页与错误处理 ----------
   await section('分页与错误处理', async () => {
     const paged = ok('价格分页参数 page/page_size 生效', await callApi('/api/prices?page=2&page_size=5', { token: adminAuth.token }), (d) => d?.list?.length === 5 && d?.page === 2 && d?.page_size === 5)
     checker.check('分页返回 total 总数', Number(paged?.total) >= 80000, `实际 ${paged?.total}`)

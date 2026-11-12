@@ -118,11 +118,11 @@ def forecast_batch(
     user: Any = Depends(require_permission("forecast:run")),
     db: Session = Depends(get_db),
 ):
-    """批量预测（同步执行，单次不超过 200 条）。"""
+    """批量预测：创建批次后由后台线程执行，立即返回排队信息供前端轮询。"""
     data = _body_dict(body)
     horizon = _as_int(data.get("horizon"), "预测步长", required=False) or forecasting.DEFAULT_HORIZON
     model_key = data.get("model_key") or None
-    result = forecasting.run_forecast_batch(
+    result = forecasting.create_forecast_batch(
         db,
         user,
         variety_ids=data.get("variety_ids"),
@@ -135,7 +135,7 @@ def forecast_batch(
         user,
         "批量预测",
         "预测分析",
-        f"批次={result.get('batch_id')} 总数={result.get('total')} 完成={result.get('done')}",
+        f"批次={result.get('batch_id')} 总数={result.get('total')} 状态={result.get('status')}",
         client_ip(request),
     )
     return ok(result)

@@ -8,6 +8,7 @@
     "infra:up": "node scripts/infra.mjs",
     "infra:down": "docker compose -f deploy/docker-compose.yml down",
     "seed": "node scripts/seed.mjs",
+    "perf:batch": "node scripts/perf-batch.mjs",
     "build": "node scripts/build.mjs",
     "test:api": "node scripts/check-api.mjs",
     "test:e2e": "node scripts/test-e2e.mjs",

@@ -29,6 +29,7 @@ const PAGES = [
   { path: '/forecast/short', file: '04-短期预测.png', prepare: { button: /开始预测/, wait: 6000 } },
   { path: '/forecast/batch', file: '05-批量预测.png', prepare: { select: ['生猪', '北京'], button: /开始批量预测/, wait: 12000 } },
   { path: '/forecast/models', file: '06-模型管理.png' },
+  { path: '/forecast/drift', file: '06b-模型监测.png', prepare: { row: true, wait: 2500 } },
   { path: '/alert/list', file: '07-预警信息.png' },
   { path: '/alert/rules', file: '08-预警规则.png' },
   { path: '/scenario', file: '09-情景推演.png', prepare: { template: '气象灾害', button: /开始推演/, wait: 5000 } },
@@ -42,6 +43,7 @@ const PAGES = [
   { path: '/admin/audit', file: '17-操作审计.png' },
   { path: '/admin/tasks', file: '18-任务调度.png' },
   { path: '/open-api', file: '19-开放API.png' },
+  { path: '/screen', file: '21-数据大屏.png', prepare: { wait: 6000 } },
 ]
 
 const backend = await startBackend({ port: 8017, logFile: path.join(ROOT, '.runtime', 'logs', 'backend-screenshots.log') })
@@ -104,6 +106,14 @@ try {
           await page.getByText(item.prepare.template, { exact: false }).first().click({ timeout: 8000 }).catch(() => undefined)
           await page.waitForTimeout(500)
         }
+        if (item.prepare.row) {
+          await page
+            .locator('.el-table__body tbody tr, .el-table tbody tr')
+            .first()
+            .click({ timeout: 10000 })
+            .catch(() => undefined)
+          await page.waitForTimeout(1800)
+        }
         if (item.prepare.select) {
           for (const [index, label] of item.prepare.select.entries()) {
             await page.locator('.page-card .el-select').nth(index).click({ timeout: 8000 }).catch(() => undefined)
@@ -121,6 +131,10 @@ try {
         }
       }
       await page.waitForTimeout(1800)
+      // 收尾：关闭可能残留的下拉/浮层并把鼠标移出内容区，避免截图出现悬停菜单
+      await page.keyboard.press('Escape').catch(() => undefined)
+      await page.mouse.move(4, 420)
+      await page.waitForTimeout(400)
       const target = path.join(SCREENSHOT_DIR, item.file)
       await page.screenshot({ path: target, fullPage: true })
       if (statSync(target).size > 8000) {
@@ -152,7 +166,7 @@ try {
   backend.stop()
 }
 
-const ok = saved >= 19 && failedPages.length === 0
+const ok = saved >= 21 && failedPages.length === 0
 if (failedPages.length > 0) console.log(`截图失败：${failedPages.join('；')}`)
 console.log(`截图目录：${SCREENSHOT_DIR}`)
 process.exit(report(saved, failedPages.length, startedAt) && ok ? 0 : 1)

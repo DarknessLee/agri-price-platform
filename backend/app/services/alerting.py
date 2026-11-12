@@ -20,9 +20,11 @@ import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ..config import ALERT_SLA_HOURS
 from ..database import now
 from ..models import AlertRecord, AlertRule, FeatureRecord, PriceRecord, Region, Variety
 from ..security import ApiError
+from . import notification
 
 LEVELS: tuple[str, ...] = ("高", "中", "低")
 STATUS_PENDING = "待处理"
@@ -175,14 +177,14 @@ def _insert_alert(
     detail: str,
     existing_keys: set[tuple[int, int, int, date]],
     recent_counts: dict[tuple[int, int, int], int],
-) -> bool:
-    """写一条预警（带去重与同规则 7 天抑制）。返回是否新增。"""
+) -> AlertRecord | None:
+    """写一条预警（带去重与同规则 7 天抑制）。返回新增的记录，未新增返回 None。"""
     key = (int(rule.id), int(variety_id), int(region_id), alert_date)
     if key in existing_keys:
-        return False
+        return None
     recent_key = (int(rule.id), int(variety_id), int(region_id))
     if recent_counts.get(recent_key, 0) >= MAX_ALERTS_PER_RULE_WINDOW:
-        return False
+        return None
     record = AlertRecord(
         rule_id=rule.id,
         variety_id=int(variety_id),
@@ -200,7 +202,7 @@ def _insert_alert(
     recent_counts[recent_key] = recent_counts.get(recent_key, 0) + 1
     rule.hit_count = int(rule.hit_count or 0) + 1
     db.add(rule)
-    return True
+    return record
 
 
 def _rule_pairs(
@@ -259,6 +261,7 @@ def evaluate_rules(
 
     created = 0
     scanned = 0
+    new_records: list[AlertRecord] = []
     for rule in rules:
         variety_id = int(rule.variety_id)
         variety_name = varieties.get(variety_id, "")
@@ -291,8 +294,10 @@ def evaluate_rules(
                 )
                 detail = _detail_for(rule, variety_name, region_name, day, spread, threshold, extra)
                 title = f"{variety_name}区域价差预警"
-                if _insert_alert(db, rule, variety_id, spread_region, day, title, detail, existing_keys, recent_counts):
+                record = _insert_alert(db, rule, variety_id, spread_region, day, title, detail, existing_keys, recent_counts)
+                if record is not None:
                     created += 1
+                    new_records.append(record)
             continue
 
         region_ids = _rule_pairs(db, rule, prices)
@@ -321,14 +326,59 @@ def evaluate_rules(
                 type_name = RULE_TYPES.get(rule.rule_type, rule.rule_type)
                 detail = _detail_for(rule, variety_name, region_name, day, current, threshold, extra)
                 title = f"{variety_name}{region_name}{type_name}预警"
-                if _insert_alert(db, rule, variety_id, region_id, day, title, detail, existing_keys, recent_counts):
+                record = _insert_alert(db, rule, variety_id, region_id, day, title, detail, existing_keys, recent_counts)
+                if record is not None:
                     created += 1
+                    new_records.append(record)
 
     if commit:
         db.commit()
     else:
         db.flush()
+    _notify_new_alerts(db, new_records, commit=commit)
     return {"created": created, "scanned": scanned, "rules": len(rules)}
+
+
+# ============================ 通知链路 ============================
+
+def _notify_new_alerts(db: Session, records: list[AlertRecord], commit: bool = True) -> None:
+    """预警扫描新增 → 全员通知（category=预警，level 取预警级别，link=/alert/list）。"""
+    if not records:
+        return
+    try:
+        for record in records[: notification.BROADCAST_LIMIT]:
+            notification.broadcast(
+                db,
+                title=f"[{record.level}] {record.title}",
+                content=(record.detail or record.title)[:255],
+                category="预警",
+                level=record.level or "中",
+                link="/alert/list",
+                commit=False,
+            )
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+    except Exception:  # 通知失败不影响主业务（预警本身已提交）
+        db.rollback()
+
+
+def _notify_handled(db: Session, record: AlertRecord, user: Any, action: str, commit: bool = True) -> None:
+    """预警 ack/close → 通知处置人（category=预警）。"""
+    try:
+        notification.notify_user(
+            db,
+            user,
+            title=f"预警已{action}：{record.title}",
+            content=f"{record.title} 已由 {_handler_name(user)} {action}。",
+            category="预警",
+            level=record.level or "中",
+            link="/alert/list",
+            commit=commit,
+        )
+    except Exception:  # 通知失败不影响处置结果（处置动作已提交）
+        db.rollback()
 
 
 # ============================ 预警查询与处置 ============================
@@ -440,6 +490,7 @@ def ack_alert(db: Session, alert_id: int, user: Any, note: str = "", commit: boo
     db.add(record)
     if commit:
         db.commit()
+    _notify_handled(db, record, user, "确认", commit=commit)
     return {"ok": True, "status": record.status}
 
 
@@ -463,6 +514,7 @@ def close_alert(
     db.add(record)
     if commit:
         db.commit()
+    _notify_handled(db, record, user, "关闭", commit=commit)
     return {"ok": True, "status": record.status}
 
 
@@ -539,6 +591,104 @@ def stats(db: Session) -> dict:
         "trend": trend,
         "recall_rate": recall_rate,
         "false_positive_rate": false_positive_rate,
+    }
+
+
+# ============================ 处置时效（SLA） ============================
+
+def sla_stats(db: Session, days: int = 30) -> dict:
+    """预警处置时效统计（契约 M2 §5）。
+
+    口径：``handled_at - created_at`` 小时数；``within_sla_rate`` 为 ≤ ALERT_SLA_HOURS 的比例；
+    ``overdue_open`` 为未关闭且已超过 SLA 的预警数。空数据一律返回 0（不是 null）。
+    """
+    try:
+        days = int(days if days is not None else 30)
+    except (TypeError, ValueError):
+        raise ApiError("E4001", "统计天数必须为整数", 400)
+    days = max(1, min(180, days))
+    today = date.today()
+    start = today - timedelta(days=days - 1)
+    start_dt = datetime.combine(start, datetime.min.time())
+    current = now()
+
+    handled_rows = db.execute(
+        select(AlertRecord)
+        .where(AlertRecord.handled_at.isnot(None))
+        .where(AlertRecord.handled_at >= start_dt)
+    ).scalars().all()
+
+    durations: list[float] = []
+    per_level: dict[str, list[float]] = {}
+    per_region: dict[int, list[float]] = {}
+    per_day: dict[date, list[float]] = {}
+    for row in handled_rows:
+        if row.created_at is None or row.handled_at is None:
+            continue
+        hours = max(0.0, (row.handled_at - row.created_at).total_seconds() / 3600.0)
+        durations.append(hours)
+        per_level.setdefault(str(row.level or "中"), []).append(hours)
+        per_region.setdefault(int(row.region_id or 0), []).append(hours)
+        per_day.setdefault(row.handled_at.date(), []).append(hours)
+
+    handled_total = len(durations)
+    avg_handle_hours = round(sum(durations) / handled_total, 1) if handled_total else 0.0
+    within = sum(1 for hours in durations if hours <= ALERT_SLA_HOURS)
+    within_sla_rate = round(within * 100.0 / handled_total, 1) if handled_total else 0.0
+
+    open_rows = db.execute(
+        select(AlertRecord)
+        .where(AlertRecord.status != STATUS_CLOSED)
+        .where(AlertRecord.created_at >= start_dt)
+    ).scalars().all()
+    open_total = len(open_rows)
+    overdue_cutoff = current - timedelta(hours=ALERT_SLA_HOURS)
+    overdue_open = sum(1 for row in open_rows if row.created_at is not None and row.created_at <= overdue_cutoff)
+
+    regions = {int(r.id): r.name for r in db.execute(select(Region)).scalars().all()}
+    by_level = [
+        {
+            "level": level,
+            "count": len(values),
+            "avg_handle_hours": round(sum(values) / len(values), 1),
+            "within_sla_rate": round(sum(1 for h in values if h <= ALERT_SLA_HOURS) * 100.0 / len(values), 1),
+        }
+        for level, values in per_level.items()
+    ]
+    by_level.sort(key=lambda item: LEVELS.index(item["level"]) if item["level"] in LEVELS else len(LEVELS))
+
+    by_area = [
+        {
+            "region": regions.get(region_id, "未知地区"),
+            "count": len(values),
+            "avg_handle_hours": round(sum(values) / len(values), 1),
+        }
+        for region_id, values in per_region.items()
+    ]
+    by_area.sort(key=lambda item: item["count"], reverse=True)
+
+    trend: list[dict] = []
+    for offset in range(days - 1, -1, -1):
+        day = today - timedelta(days=offset)
+        values = per_day.get(day, [])
+        trend.append(
+            {
+                "date": day.strftime("%Y-%m-%d"),
+                "handled": len(values),
+                "avg_handle_hours": round(sum(values) / len(values), 1) if values else 0.0,
+            }
+        )
+
+    return {
+        "avg_handle_hours": avg_handle_hours,
+        "within_sla_rate": within_sla_rate,
+        "sla_hours": int(ALERT_SLA_HOURS),
+        "handled_total": handled_total,
+        "overdue_open": overdue_open,
+        "open_total": open_total,
+        "by_level": by_level,
+        "by_area": by_area,
+        "trend": trend,
     }
 
 

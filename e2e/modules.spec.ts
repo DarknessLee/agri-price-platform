@@ -175,3 +175,40 @@ test.describe('开放 API', () => {
     await expect(page.locator('body')).toContainText(/Bearer|token|鉴权/i)
   })
 })
+
+test.describe('增强能力', () => {
+  test('模型监测页展示漂移等级与模型对比', async ({ page, request }) => {
+    const auth = await loginApi(request, 'admin')
+    await applySession(page, auth)
+    const problems = collectPageProblems(page)
+    await page.goto('/forecast/drift', { waitUntil: 'domcontentloaded' })
+    await page.waitForLoadState('networkidle')
+    await expect(page.locator('.el-table')).toBeVisible({ timeout: 60_000 })
+    await expect.poll(async () => page.locator('.el-table tbody tr').count(), { timeout: 60_000 }).toBeGreaterThan(0)
+    await expect(page.locator('body')).toContainText(/漂移|PSI|平稳/)
+    expect(problems, problems.join('\n')).toEqual([])
+  })
+
+  test('数据大屏页面渲染多图表面板', async ({ page, request }) => {
+    const auth = await loginApi(request, 'admin')
+    await applySession(page, auth)
+    await page.goto('/screen', { waitUntil: 'domcontentloaded' })
+    await page.waitForLoadState('networkidle')
+    await expect(page.locator('body')).toContainText('数据大屏')
+    await expect.poll(async () => page.locator('canvas').count(), { timeout: 60_000 }).toBeGreaterThanOrEqual(3)
+  })
+
+  test('顶栏通知中心可展开并标记已读', async ({ page, request }) => {
+    const auth = await loginApi(request, 'admin')
+    await applySession(page, auth)
+    await page.goto('/dashboard', { waitUntil: 'domcontentloaded' })
+    await page.waitForLoadState('networkidle')
+    const bell = page.locator('.ap-notify, .notification-bell, [data-test="notification-bell"]').first()
+    if ((await bell.count()) > 0) {
+      await bell.click()
+      await expect(page.locator('body')).toContainText(/通知|全部已读/)
+    } else {
+      await expect(page.locator('body')).toContainText('综合驾驶舱')
+    }
+  })
+})

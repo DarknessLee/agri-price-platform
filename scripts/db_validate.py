@@ -72,6 +72,9 @@ EXPECTED_TABLES = [
     "quality_issue",
     "scheduled_task",
     "audit_log",
+    "sys_notification",
+    "open_api_client",
+    "open_api_call",
 ]
 
 COUNT_SQL = {
@@ -95,6 +98,9 @@ COUNT_SQL = {
     "tasks": "SELECT COUNT(*) FROM scheduled_task",
     "audits": "SELECT COUNT(*) FROM audit_log",
     "sources": "SELECT COUNT(*) FROM dim_data_source",
+    "notifications": "SELECT COUNT(*) FROM sys_notification",
+    "apiClients": "SELECT COUNT(*) FROM open_api_client",
+    "apiCalls": "SELECT COUNT(*) FROM open_api_call",
 }
 
 
@@ -108,7 +114,7 @@ def run_checks(engine) -> tuple[dict, list[dict]]:
 
         table_names = set(inspect(conn).get_table_names())
         missing = [name for name in EXPECTED_TABLES if name not in table_names]
-        checks.check("核心数据表齐全（24 张）", not missing, f"缺少：{', '.join(missing)}")
+        checks.check("核心数据表齐全（27 张）", not missing, f"缺少：{', '.join(missing)}")
 
         for key, sql in COUNT_SQL.items():
             counts[key] = int(scalar(sql) or 0)
@@ -133,6 +139,9 @@ def run_checks(engine) -> tuple[dict, list[dict]]:
         checks.check("审计日志 >= 18", counts["audits"] >= 18, f"实际 {counts['audits']}")
         checks.check("模型版本 >= 4（已完成训练）", counts["models"] >= 4, f"实际 {counts['models']}")
         checks.check("预测结果记录 >= 5", counts["forecasts"] >= 5, f"实际 {counts['forecasts']}")
+        checks.check("站内通知 >= 10", counts["notifications"] >= 10, f"实际 {counts['notifications']}")
+        checks.equal("开放 API 调用方 = 3", counts["apiClients"], 3)
+        checks.check("开放 API 调用流水 >= 200", counts["apiCalls"] >= 200, f"实际 {counts['apiCalls']}")
 
         # ---------------------------------------------------------- 时间范围
         min_date = scalar("SELECT MIN(price_date) FROM price_record")

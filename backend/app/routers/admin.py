@@ -25,7 +25,7 @@ from ..models import (
 )
 from ..responses import ok, page_args, paged
 from ..security import ApiError, CurrentUser, client_ip, hash_password, require_permission, write_audit
-from ..services import quality
+from ..services import notification, quality
 
 router = APIRouter(tags=["后台管理"])
 
@@ -533,6 +533,18 @@ def run_task(
     task.last_result = result[:255]
     db.commit()
     db.refresh(task)
+    try:
+        notification.broadcast(
+            db,
+            f"调度任务执行完成：{task.name}",
+            result[:200],
+            category="任务",
+            level="低",
+            link="/admin/tasks",
+            commit=True,
+        )
+    except Exception:  # 通知不影响任务执行
+        db.rollback()
     write_audit(
         db, user, "执行任务", MODULE_ADMIN, f"手动执行任务 {task.name}：{result[:120]}", client_ip(request)
     )

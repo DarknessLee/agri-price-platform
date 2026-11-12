@@ -1,9 +1,12 @@
 """报告管理路由（契约 §9）：报告列表、生成、详情、下载与删除。"""
 from __future__ import annotations
 
+import io
+import urllib.parse
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -12,6 +15,20 @@ from ..security import ApiError, client_ip, require_permission, write_audit
 from ..services import reporting
 
 router = APIRouter(tags=["报告管理"])
+
+
+def _content_disposition(filename: str, ascii_fallback: str) -> str:
+    """中文文件名按 RFC5987 编码，同时保留 ASCII 回退名。"""
+    quoted = urllib.parse.quote(filename)
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quoted}"
+
+
+def _xlsx_response(filename: str, content: bytes, ascii_fallback: str) -> StreamingResponse:
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=reporting.XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": _content_disposition(filename, ascii_fallback)},
+    )
 
 
 def _body_dict(body: Any) -> dict:
@@ -75,6 +92,17 @@ def reports_generate(
     )
 
 
+@router.get("/reports/template")
+def reports_template(
+    report_type: str = Query(default="daily"),
+    user: Any = Depends(require_permission("report:view")),
+    db: Session = Depends(get_db),
+):
+    """下载空白报告模板 Excel（概览 / 价格与预测 / 预警摘要）。"""
+    filename, content = reporting.template_xlsx(report_type)
+    return _xlsx_response(filename, content, "report_template.xlsx")
+
+
 @router.get("/reports/{report_id}")
 def reports_detail(
     report_id: int,
@@ -92,9 +120,12 @@ def reports_download(
     user: Any = Depends(require_permission("report:view")),
     db: Session = Depends(get_db),
 ):
-    """下载报告（html / md）。"""
-    filename, content = reporting.report_download(db, report_id, fmt)
+    """下载报告（html / md / xlsx）。"""
     fmt = (fmt or "html").lower()
+    if fmt in ("xlsx", "excel"):
+        filename, content = reporting.report_xlsx(db, report_id)
+        return _xlsx_response(filename, content, "report.xlsx")
+    filename, content = reporting.report_download(db, report_id, fmt)
     media_type = "text/html; charset=utf-8" if fmt == "html" else "text/markdown; charset=utf-8"
     return Response(
         content=content.encode("utf-8"),

@@ -10,7 +10,9 @@ generate_report(db, user, report_type="daily", date=None, period_start=None, per
 from __future__ import annotations
 
 import html as html_lib
+import io
 import json
+import logging
 from datetime import date, timedelta
 from typing import Any
 
@@ -21,6 +23,9 @@ from ..config import REPORT_DIR
 from ..database import now
 from ..models import AlertRecord, ForecastResult, ModelVersion, PriceRecord, Region, Report, Variety
 from ..security import ApiError
+from . import notification
+
+logger = logging.getLogger(__name__)
 
 REPORT_TYPES: dict[str, str] = {"daily": "日报", "weekly": "周报", "monthly": "月报"}
 DEFAULT_MARKET_TYPE = "批发"
@@ -525,6 +530,19 @@ def generate_report(
     db.add(record)
     db.flush()
 
+    # 站内通知：报告生成成功。与报告同事务提交，通知失败不得影响报告生成。
+    try:
+        notification.broadcast(
+            db,
+            f"报告已生成：{record.title}",
+            f"{record.report_type} {start.strftime('%Y-%m-%d')}~{end.strftime('%Y-%m-%d')}",
+            category="报告",
+            level="低",
+            link="/report",
+        )
+    except Exception:
+        logger.exception("报告生成通知发送失败：report_id=%s", record.id)
+
     # HTML 落盘，供 /api/reports/{id}/download 直接读取
     try:
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -635,7 +653,7 @@ def report_download(db: Session, report_id: int, fmt: str = "html") -> tuple[str
         raise ApiError("E4040", "报告不存在", 404)
     fmt = str(fmt or "html").lower()
     if fmt not in ("html", "md", "markdown"):
-        raise ApiError("E4001", "导出格式仅支持 html 或 md", 400)
+        raise ApiError("E4001", "导出格式仅支持 html、md 或 xlsx", 400)
     payload = _read_json(record.metrics, {})
     if fmt == "html":
         content = payload.get("content_html") or ""
@@ -656,3 +674,260 @@ def report_download(db: Session, report_id: int, fmt: str = "html") -> tuple[str
         content = f"# {record.title}\n\n{record.summary}\n"
     filename = f"{record.report_type}_{record.id}_{record.period_end.strftime('%Y%m%d') if record.period_end else 'report'}.{extension}"
     return filename, content
+
+
+# ============================ Excel 导出（openpyxl） ============================
+
+STATS_LABELS: list[tuple[str, str]] = [
+    ("avg_price", "平均批发价（元/公斤）"),
+    ("price_change_pct", "区间涨跌幅（%）"),
+    ("variety_count", "品种数"),
+    ("region_count", "地区数"),
+    ("record_count", "价格记录数"),
+    ("alert_count", "预警条数"),
+    ("model_count", "在用模型数"),
+    ("avg_mape", "平均 MAPE（%）"),
+    ("avg_direction_acc", "平均方向准确率（%）"),
+]
+
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _xlsx_builder():
+    """延迟导入 openpyxl 与样式对象，避免服务启动即依赖 Excel 组件。"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError as exc:  # pragma: no cover - 环境缺组件时给出可读提示
+        raise ApiError("E5000", f"Excel 导出组件不可用：{exc}", 500)
+    return Workbook, Alignment, Border, Font, PatternFill, Side, get_column_letter
+
+
+def _period_text(record: Report) -> str:
+    if record.period_start and record.period_end:
+        return f"{record.period_start.strftime('%Y-%m-%d')} 至 {record.period_end.strftime('%Y-%m-%d')}"
+    return ""
+
+
+def _build_xlsx(
+    title: str,
+    report_type_name: str,
+    period_text: str,
+    status: str,
+    summary: str,
+    sections: list[dict],
+    stats: dict,
+    checked_at: str,
+) -> bytes:
+    """生成三工作表 Excel：概览 / 价格与预测 / 预警摘要。"""
+    Workbook, Alignment, Border, Font, PatternFill, Side, get_column_letter = _xlsx_builder()
+    thin = Side(style="thin", color="D5DDD8")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor="2F6F4F")
+    title_font = Font(bold=True, size=13, color="2F6F4F")
+    wrap_top = Alignment(wrap_text=True, vertical="top")
+
+    def style_header(ws, columns: list[str], row: int = 1) -> None:
+        for index, column in enumerate(columns, start=1):
+            cell = ws.cell(row=row, column=index, value=column)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = border
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    def append_table(ws, columns: list[str], rows: list[list[Any]], row: int) -> int:
+        style_header(ws, columns, row)
+        row += 1
+        for values in rows:
+            for index, value in enumerate(values, start=1):
+                cell = ws.cell(row=row, column=index, value=value)
+                cell.border = border
+                cell.alignment = wrap_top
+            row += 1
+        return row
+
+    def fit_width(ws, widths: list[int]) -> None:
+        for index, width in enumerate(widths, start=1):
+            ws.column_dimensions[get_column_letter(index)].width = width
+
+    def pick_sections(keywords: tuple[str, ...]) -> list[dict]:
+        return [
+            section
+            for section in sections
+            if any(keyword in str(section.get("title", "")) for keyword in keywords)
+        ]
+
+    wb = Workbook()
+
+    # ---------- 工作表一：概览 ----------
+    overview = wb.active
+    overview.title = "概览"
+    overview["A1"] = "报告标题"
+    overview["B1"] = title
+    overview["A2"] = "报告类型"
+    overview["B2"] = report_type_name
+    overview["A3"] = "统计区间"
+    overview["B3"] = period_text
+    overview["A4"] = "报告状态"
+    overview["B4"] = status
+    overview["A5"] = "生成时间"
+    overview["B5"] = checked_at
+    overview["A6"] = "摘要"
+    overview["B6"] = summary
+    overview.merge_cells("B6:D6")
+    for row in range(1, 7):
+        overview.cell(row=row, column=1).font = Font(bold=True)
+        overview.cell(row=row, column=1).fill = PatternFill("solid", fgColor="EEF5F0")
+        overview.cell(row=row, column=1).border = border
+        overview.cell(row=row, column=1).alignment = wrap_top
+        overview.cell(row=row, column=2).alignment = wrap_top
+        overview.cell(row=row, column=2).border = border
+    overview["A8"] = "关键指标"
+    overview["A8"].font = title_font
+    index = 9
+    style_header(overview, ["指标", "数值"], index)
+    index += 1
+    for key, label in STATS_LABELS:
+        if key not in stats:
+            continue
+        overview.cell(row=index, column=1, value=label).border = border
+        overview.cell(row=index, column=2, value=stats.get(key)).border = border
+        index += 1
+    if index == 10:
+        overview.cell(row=index, column=1, value="暂无统计数据").border = border
+    fit_width(overview, [24, 52, 26, 20])
+    overview.freeze_panes = "A2"
+
+    # ---------- 工作表二：价格与预测 ----------
+    price_sheet = wb.create_sheet("价格与预测")
+    price_sections = pick_sections(("价格", "预测"))
+    price_row = 1
+    if not price_sections:
+        price_row = append_table(
+            price_sheet,
+            ["品种", "地区", "期间均价", "期间涨跌幅（%）", "预测均价", "预测方向"],
+            [["统计区间内暂无价格与预测数据"] + [""] * 5],
+            price_row,
+        )
+    else:
+        for section in price_sections:
+            price_sheet.cell(row=price_row, column=1, value=section.get("title", "")).font = title_font
+            price_row += 1
+            for paragraph in section.get("paragraphs", []) or []:
+                price_sheet.cell(row=price_row, column=1, value=str(paragraph)).alignment = wrap_top
+                price_sheet.merge_cells(start_row=price_row, start_column=1, end_row=price_row, end_column=6)
+                price_row += 1
+            table = section.get("table") or {}
+            columns = [str(item) for item in (table.get("columns") or [])]
+            rows = table.get("rows") or []
+            if columns:
+                price_row = append_table(price_sheet, columns, rows, price_row)
+            price_row += 1
+    fit_width(price_sheet, [16, 14, 14, 18, 14, 14, 14, 14])
+    price_sheet.freeze_panes = "A2"
+
+    # ---------- 工作表三：预警摘要 ----------
+    alert_sheet = wb.create_sheet("预警摘要")
+    alert_sections = pick_sections(("预警",))
+    alert_row = 1
+    if not alert_sections:
+        alert_row = append_table(
+            alert_sheet,
+            ["预警日期", "级别", "品种", "地区", "标题", "状态", "处置人"],
+            [["统计区间内无预警记录"] + [""] * 6],
+            alert_row,
+        )
+    else:
+        for section in alert_sections:
+            alert_sheet.cell(row=alert_row, column=1, value=section.get("title", "")).font = title_font
+            alert_row += 1
+            table = section.get("table") or {}
+            columns = [str(item) for item in (table.get("columns") or [])]
+            rows = table.get("rows") or []
+            if columns:
+                alert_row = append_table(alert_sheet, columns, rows, alert_row)
+            else:
+                for paragraph in section.get("paragraphs", []) or []:
+                    alert_sheet.cell(row=alert_row, column=1, value=str(paragraph)).alignment = wrap_top
+                    alert_sheet.merge_cells(
+                        start_row=alert_row, start_column=1, end_row=alert_row, end_column=7
+                    )
+                    alert_row += 1
+            alert_row += 1
+    fit_width(alert_sheet, [14, 10, 14, 14, 30, 12, 12])
+    alert_sheet.freeze_panes = "A2"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def report_xlsx(db: Session, report_id: int) -> tuple[str, bytes]:
+    """把报告导出为 Excel（三工作表），返回 (文件名, 二进制内容)。"""
+    record = db.get(Report, int(report_id))
+    if record is None:
+        raise ApiError("E4040", "报告不存在", 404)
+    payload = _read_json(record.metrics, {})
+    sections = payload.get("sections") or []
+    stats = payload.get("stats") or {}
+    data = _build_xlsx(
+        title=record.title or "",
+        report_type_name=REPORT_TYPES.get(record.report_type, record.report_type),
+        period_text=_period_text(record),
+        status=record.status or "",
+        summary=record.summary or "",
+        sections=sections if isinstance(sections, list) else [],
+        stats=stats if isinstance(stats, dict) else {},
+        checked_at=record.created_at.strftime("%Y-%m-%d %H:%M:%S") if record.created_at else "",
+    )
+    suffix = record.period_end.strftime("%Y%m%d") if record.period_end else "report"
+    filename = f"{REPORT_TYPES.get(record.report_type, record.report_type)}_{suffix}_{record.id}.xlsx"
+    return filename, data
+
+
+def template_xlsx(report_type: str = "daily") -> tuple[str, bytes]:
+    """生成空白报告模板 Excel（三工作表，仅表头与说明）。"""
+    report_type = str(report_type or "daily")
+    if report_type not in REPORT_TYPES:
+        raise ApiError("E4001", "报告类型仅支持 daily/weekly/monthly", 400)
+    sections = [
+        {
+            "title": "价格与预测",
+            "paragraphs": ["请填写统计区间后，在系统中生成正式报告。"],
+            "table": {
+                "columns": [
+                    "品种",
+                    "地区",
+                    "期间均价",
+                    "期间涨跌幅（%）",
+                    "预测均价",
+                    "预测方向",
+                    "区间下限",
+                    "区间上限",
+                ],
+                "rows": [],
+            },
+        },
+        {
+            "title": "预警摘要",
+            "paragraphs": [],
+            "table": {
+                "columns": ["预警日期", "级别", "品种", "地区", "标题", "状态", "处置人"],
+                "rows": [],
+            },
+        },
+    ]
+    data = _build_xlsx(
+        title="农产品价格分析报告模板",
+        report_type_name=REPORT_TYPES[report_type],
+        period_text="待填写",
+        status="模板",
+        summary="空白模板：用于线下填报与归档，正式报告请在系统中生成。",
+        sections=sections,
+        stats={},
+        checked_at="",
+    )
+    return f"{REPORT_TYPES[report_type]}模板.xlsx", data
+
