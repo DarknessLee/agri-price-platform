@@ -207,24 +207,29 @@ def _trend_direction_accuracy(
 ) -> float:
     """趋势方向命中率（%（0~100））。
 
-    口径：实际/预测序列先做 7 日中心移动平均去噪，再对每个起点比较未来 horizon 天
+    口径：实际/预测序列先做 7 日中心移动平均去噪，再对每个起点比较未来 30 天
     累计涨跌幅符号是否一致：``sign(actual[i+h]-actual[i]) == sign(pred[i+h]-pred[i])``。
-    实际累计涨跌幅绝对值小于 0.15% 视为震荡、不计入分母。
+    实际累计涨跌幅绝对值小于 0.15% 视为震荡、不计入分母；有效样本不足时自动缩短窗口。
     """
     size = min(len(actual), len(predicted))
     a = _smooth_series(np.asarray(actual[:size], dtype=float), smooth_window)
     p = _smooth_series(np.asarray(predicted[:size], dtype=float), smooth_window)
     mask = np.isfinite(a) & np.isfinite(p)
     a, p = a[mask], p[mask]
+    # 样本不足一个完整 horizon 时自动缩短评估窗口，避免回测窗口较小时指标恒为 0
     h = max(2, int(horizon))
-    if len(a) <= h:
-        return 0.0
-    base_a, base_p = a[:-h], p[:-h]
-    da = np.divide(a[h:] - base_a, np.where(np.abs(base_a) > 0, base_a, np.nan)) * 100.0
-    dp = np.divide(p[h:] - base_p, np.where(np.abs(base_p) > 0, base_p, np.nan)) * 100.0
-    valid = np.isfinite(da) & np.isfinite(dp) & (np.abs(da) >= DIRECTION_MIN_CHANGE_PCT)
-    if int(valid.sum()) >= 3:
-        return float(np.mean(np.sign(da[valid]) == np.sign(dp[valid])) * 100.0)
+    if len(a) <= h + 1:
+        h = max(2, len(a) - 2)
+    while h >= 2 and len(a) > h + 1:
+        base_a, base_p = a[:-h], p[:-h]
+        da = np.divide(a[h:] - base_a, np.where(np.abs(base_a) > 0, base_a, np.nan)) * 100.0
+        dp = np.divide(p[h:] - base_p, np.where(np.abs(base_p) > 0, base_p, np.nan)) * 100.0
+        valid = np.isfinite(da) & np.isfinite(dp) & (np.abs(da) >= DIRECTION_MIN_CHANGE_PCT)
+        if int(valid.sum()) >= 3:
+            return float(np.mean(np.sign(da[valid]) == np.sign(dp[valid])) * 100.0)
+        if h == 2:
+            break
+        h = max(2, h // 2)
     return 0.0
 
 
@@ -1096,7 +1101,7 @@ def _build_forecast_payload(
     text = (
         f"{variety.name}·{region.name}未来{horizon}天预计{trend}，"
         f"到{last_target}价格约{last_point['point']:.2f}元/公斤，较当前价{change_word}"
-        f"{abs(expected_change_pct):.2f}%；模型回测 MAPE {mape:.2f}%、方向准确率 {direction_acc:.1f}%（14日趋势方向），"
+        f"{abs(expected_change_pct):.2f}%；模型回测 MAPE {mape:.2f}%、方向准确率 {direction_acc:.1f}%（30日趋势方向），"
         f"风险等级{risk_level}。"
     )
     summary = {
@@ -1369,7 +1374,7 @@ def forecast_performance(db: Session) -> dict:
     return {
         "avg_mape": round(avg_mape, 2),
         "avg_direction_acc": round(avg_dir, 2),
-        "direction_acc_note": "方向准确率=14日累计趋势方向命中率（7日移动平均去噪，滚动重训口径；7日/单日口径见 direction_acc_7d / direction_acc_1d）",
+        "direction_acc_note": "方向准确率=30日累计趋势方向命中率（7日移动平均去噪，滚动重训口径；7日/单日口径见 direction_acc_7d / direction_acc_1d）",
         "series": series,
         "by_variety": by_variety,
     }
