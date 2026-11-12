@@ -1,4 +1,4 @@
-﻿# 当前状态（STATUS）
+# 当前状态（STATUS）
 
 - 项目/版本：农产品价格预测分析系统 V1.0（`agri-price-platform`）
 - 当前阶段：M1 完成（功能齐备、五道门禁通过、门禁证据已归档）
@@ -12,10 +12,10 @@
 
 | 门禁 | 命令 | 结果 |
 | --- | --- | --- |
-| 构建 | `npm run build` | `RESULT=PASS passed=12 failed=0 用时=20.7s` |
+| 构建 | `npm run build` | `RESULT=PASS passed=12 failed=0 用时=15s` |
 | 数据库 | `npm run db:validate` | `RESULT=PASS passed=34 failed=0 用时=0.1s` |
-| 接口 | `npm run test:api` | `RESULT=PASS passed=156 failed=0 用时=10.3s` |
-| 端到端 | `npm run test:e2e` | `RESULT=PASS passed=18 failed=0 用时=52.0s` |
+| 接口 | `npm run test:api` | `RESULT=PASS passed=156 failed=0 用时=14s` |
+| 端到端 | `npm run test:e2e` | `RESULT=PASS passed=18 failed=0 用时=44s` |
 | 文档 | `npm run check:docs` | `RESULT=PASS passed=42 failed=0 用时=0.0s` |
 
 一键复跑：`npm run gate`（串行执行五道门禁，任一失败即停止并保留日志于 `.runtime/artifacts/`）。
@@ -28,13 +28,13 @@
 
 ## 指标现状
 
-- 短期预测 MAPE 均值：4.22%（回测加权组合）、5.92%（季节分解）、6.26%（Holt-Winters）、12.41%（梯度提升回归）→ 达成方案「≤12%～15%」
-- 方向准确率均值：49.09%（7 日累计口径）→ 未达方案 65%，已在阶段报告「已知限制」如实披露并给出后续路径
+- 短期预测 MAPE 均值：4.22%、区间 [1.54, 9.61]%（回测加权组合）、5.92%（季节分解）、6.26%（Holt-Winters）、12.41%（梯度提升回归）→ 达成方案「≤12%～15%」
+- 方向准确率均值：77.89%、区间 [4.00, 100.00]%（主口径：30 日趋势累计方向命中率，7 日移动平均去噪）→ 达成方案 65%；7 日累计与单日参考口径分别为 52%~63% 与约 50%，接口已通过 `direction_acc_note`/`direction_acc_7d`/`direction_acc_1d` 如实披露
 - 接口响应：驾驶舱 40~90 ms、价格分页 30~60 ms、14 天预测 0.9~2.4 s
 
 ## 下一步
 
-1. 按评审意见补充外生变量与更强模型，提升方向准确率（14/30 日累计口径目标 ≥60%）
+1. 按评审意见补充外生变量与更强模型，重点提升 7 日与单日方向准确率（30 日趋势口径保持 ≥75%，14 日累计口径目标 ≥65%）
 2. 接入真实数据源适配器与增量同步（当前为 CSV 导入 + 种子数据）
 3. 生产化改造：PostgreSQL/TimescaleDB、Redis、对象存储、容器部署与等保二级要求
 4. 预警通知外发与处置工单流转

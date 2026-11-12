@@ -27,7 +27,7 @@ const PAGES = [
   { path: '/monitor/prices', file: '02-价格监测.png' },
   { path: '/monitor/analysis', file: '03-监测分析.png' },
   { path: '/forecast/short', file: '04-短期预测.png', prepare: { button: /开始预测/, wait: 6000 } },
-  { path: '/forecast/batch', file: '05-批量预测.png' },
+  { path: '/forecast/batch', file: '05-批量预测.png', prepare: { select: ['生猪', '北京'], button: /开始批量预测/, wait: 12000 } },
   { path: '/forecast/models', file: '06-模型管理.png' },
   { path: '/alert/list', file: '07-预警信息.png' },
   { path: '/alert/rules', file: '08-预警规则.png' },
@@ -103,6 +103,15 @@ try {
         if (item.prepare.template) {
           await page.getByText(item.prepare.template, { exact: false }).first().click({ timeout: 8000 }).catch(() => undefined)
           await page.waitForTimeout(500)
+        }
+        if (item.prepare.select) {
+          for (const [index, label] of item.prepare.select.entries()) {
+            await page.locator('.page-card .el-select').nth(index).click({ timeout: 8000 }).catch(() => undefined)
+            await page.waitForTimeout(400)
+            await page.getByRole('option', { name: label, exact: false }).first().click({ timeout: 8000 }).catch(() => undefined)
+            await page.keyboard.press('Escape')
+            await page.waitForTimeout(300)
+          }
         }
         const button = page.getByRole('button', { name: item.prepare.button }).first()
         if (await button.count()) {
