@@ -201,12 +201,24 @@ def summary(db: Session) -> dict:
     if not isinstance(updated_at, datetime):
         updated_at = now()
 
+    # 缺失记录：窗口内被标记为「缺失估算 / 缺失」的价格点数量
+    missing_count = int(
+        db.execute(
+            select(func.count(PriceRecord.id)).where(
+                PriceRecord.price_date >= start,
+                PriceRecord.price_date <= end,
+                PriceRecord.quality_flag.in_(("缺失估算", "缺失")),
+            )
+        ).scalar()
+        or 0
+    )
+
     return {
         "completeness": overall,
         "duplicate_rate": duplicate_rate(db),
         "outlier_count": _pending_count(db, _OUTLIER_TYPES),
         "total_records": total_records,
-        "missing_count": max(expected - present, 0) if combos else 0,
+        "missing_count": missing_count,
         "by_variety": by_variety,
         "by_type": issue_type_distribution(db),
         "updated_at": _fmt_time(updated_at) or _fmt_time(now()),

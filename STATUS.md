@@ -13,10 +13,10 @@
 
 | 门禁 | 命令 | 结果 |
 | --- | --- | --- |
-| 构建 | `npm run build` | `RESULT=PASS passed=12 failed=0 用时=15s` |
+| 构建 | `npm run build` | `RESULT=PASS passed=12 failed=0 用时=17s` |
 | 数据库 | `npm run db:validate` | `RESULT=PASS passed=34 failed=0 用时=1s` |
-| 接口 | `npm run test:api` | `RESULT=PASS passed=163 failed=0 用时=13s` |
-| 端到端 | `npm run test:e2e` | `RESULT=PASS passed=18 failed=0 用时=48s` |
+| 接口 | `npm run test:api` | `RESULT=PASS passed=163 failed=0 用时=14s` |
+| 端到端 | `npm run test:e2e` | `RESULT=PASS passed=18 failed=0 用时=49s` |
 | 文档 | `npm run check:docs` | `RESULT=PASS passed=42 failed=0 用时=0.0s` |
 
 一键复跑：`npm run gate`（串行执行五道门禁，任一失败即停止并保留日志于 `.runtime/artifacts/`）。
