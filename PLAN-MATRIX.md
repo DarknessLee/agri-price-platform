@@ -12,7 +12,7 @@
 | 数据校验：单位/编码/重复/缺失/异常 | §4.1 | 已实现 | `/api/quality/*`、`services/quality.py`、db:validate 质量标记校验、截图 12 | 四类问题：价格异常波动/缺失/重复/格式错误 |
 | 数据治理：统一品种/地区/单位/频率口径 | §4.2 | 已实现 | `/api/admin/varieties`、`/api/admin/regions`、`/api/meta/dicts`、截图 16 | 主数据统一编码与单位 |
 | 数据治理：血缘与版本 | §4.2 | 部分 | 导入任务记录、`audit_log` | 任务级可追溯；字段级血缘暂缓 |
-| 数据仓库：价格事实表/特征表/预测表/预警表 | §4.2 | 已实现 | `backend/app/models.py`（24 表）、db:validate 表结构断言 | SQLite 实现，预留 PostgreSQL |
+| 数据仓库：价格事实表/特征表/预测表/预警表 | §4.2 | 已实现 | `backend/app/models.py`（24 表）、db:validate 表结构断言、`deploy/docker-compose.yml` | MySQL 8（`agri_price`）实现，可切回 SQLite；时序库 TimescaleDB 暂缓 |
 | 监测：多市场对比（批发/零售） | §4.3 | 已实现 | `/api/prices`、`frontend/src/views/monitor/PriceMonitor.vue`、截图 02 | 12 个市场、2 种市场类型 |
 | 监测：同比环比、季节指数、波动率、价差、比价 | §4.3 | 已实现 | `/api/prices/seasonality`、`/region-spread`、`/variety-compare`、截图 03 | 四项指标口径见用户手册 §4 |
 | 监测：成本收益、供需景气指数 | §4.3 | 部分 | `feature_record.cost_index/freight_index/weather_score` | 以特征指标呈现，未做收益核算报表 |
@@ -38,11 +38,12 @@
 | 后台：用户/角色/机构/菜单/审计 | §4.7 | 已实现 | `/api/users`、`/api/roles`、`/api/audit-logs`、截图 14/15/17 | 机构为字段级，菜单按权限动态过滤 |
 | 后台：数据源/品种/地区/指标/规则配置 | §4.7 | 已实现 | `/api/sources`、`/api/admin/*`、截图 11/16 | 市场主数据只读 |
 | 后台：任务调度/系统监控 | §4.7 | 部分 | `/api/tasks`、`/api/system/info`、截图 18 | 5 个内置任务可手动执行；监控为应用内指标，无外部告警 |
-| 非功能：查询 ≤3 秒 | §6 | 已实现 | test:api 全量 156 断言 10.3 s；驾驶舱 40~90 ms | 本机 SQLite，数据量 8 万级 |
+| 非功能：查询 ≤3 秒 | §6 | 已实现 | test:api 全量 156 断言 10.3 s；驾驶舱 40~90 ms（缓存命中 <10 ms） | 本机 MySQL 8 + Redis 7，数据量 8 万级 |
 | 非功能：批量预测 1 万条 ≤10 分钟 | §6 | 部分 | `forecast_batch` 串行实现 | 未做 1 万条压测；需并行化与异步队列 |
 | 非功能：可用性 99.5% | §6 | 部分 | 单机部署说明、`.runtime/logs/` | 无多副本与故障转移 |
 | 安全：认证/RBAC/审计/脱敏 | §6 | 已实现 | `security.py`、test:api 权限隔离段（4 角色）、截图 20 | 口令 PBKDF2、token 8 小时；敏感字段不落日志 |
 | 安全：传输加密与等保二级 | §2.2 | 部分 | 部署层可选 HTTPS | 未做等保测评与渗透测试 |
-| 中间件：Kafka/Redis/MinIO/MLflow/ELK/Prometheus/K8s | §5.1 | 暂缓 | `DECISIONS.md` D05 | 触发条件：生产化部署与多实例并发 |
+| 中间件：Redis 热点缓存与令牌黑名单 | §5.1 | 已实现 | `backend/app/cache.py`、`X-Cache: HIT/MISS` 响应头、注销后旧 token 失效用例 | 驾驶舱/字典/性能接口缓存 30~300 s；不可用时自动降级直连 |
+| 中间件：Kafka/MinIO/MLflow/ELK/Prometheus/K8s | §5.1 | 暂缓 | `DECISIONS.md` D05/D15 | 触发条件：生产化部署与多实例并发 |
 | 交付：一键启动/种子重建/门禁/文档/截图 | §12 | 已实现 | `npm run dev`、`npm run seed`、`npm run gate`、9 份文档、21 张截图 | 见 `docs/阶段报告-M1.md` |
 | 软著登记材料（60 页源码+手册+申请表） | 案例复盘 §17.8 | 不做 | — | 默认不做；如需要另行立项 |
