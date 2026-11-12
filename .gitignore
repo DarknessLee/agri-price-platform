@@ -1,0 +1,32 @@
+# 运行时数据与日志
+.runtime/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pkl
+*.joblib
+*.log
+data/
+frontend/.tmp/
+.build-tmp/
+
+# 前端
+node_modules/
+frontend/dist/
+frontend/node_modules/
+frontend/.vite/
+frontend/tsconfig.tsbuildinfo
+
+# 测试产物
+test-results/
+playwright-report/
+screenshots/tmp/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
