@@ -27,7 +27,7 @@
 
 - 代码：`backend/`（FastAPI，30 张表、14 路由模块、15 服务模块，MySQL 存储 + Redis 缓存/限流 + MinIO 对象存储 + 进程内调度器）、`frontend/`（Vue3 + TS，25 视图，含数据大屏与系统监控）、`scripts/`（门禁、压测、备份、启动与数据服务脚本）、`e2e/`（Playwright 用例）、`deploy/docker-compose.yml`（MySQL / Redis / MinIO / Mailpit 编排）
 - 文档：`README.md`、`STATUS.md`、`DECISIONS.md`、`PLAN-MATRIX.md`、`docs/方案解读卡.md`、`docs/接口契约.md`、`docs/接口契约-M2.md`、`docs/接口契约-M3.md`、`docs/用户手册.md`、`docs/数据字典.md`（阶段验收报告为过程文档，已按手册清理且不纳入 git）
-- 交付物包：`deliverables/`（开发书 §12 的 13 项：需求规格、系统设计、数据库设计、接口文档、数据治理规范、模型训练与回测报告、测试报告、安全与合规说明、部署运维手册、用户操作手册、培训材料、源码与部署包、验收报告），`npm run package:zip` 重新生成 `12-源码与部署包.zip`，`npm run deliverables` 校验齐全性与行数（51 项断言）
+- 交付物包：`deliverables/`（开发书 §12 的 13 项：需求规格、系统设计、数据库设计、接口文档、数据治理规范、模型训练与回测报告、测试报告、安全与合规说明、部署运维手册、用户操作手册、培训材料、源码与部署包、验收报告），`npm run package:zip` 重新生成 `12-源码与部署包.zip`，`npm run deliverables` 校验齐全性与行数（51 项断言）；另附客户介绍 `deliverables/14-农产品价格监测预测分析平台-客户介绍.docx`（业务流程、操作步骤与 21 张界面截图）
 - 证据：`docs/screenshots/`（24 张界面截图，含数据大屏、模型监测、系统监控、权限隔离）、`.runtime/artifacts/`（门禁日志、E2E 报告）、`.runtime/backups/`（备份产物）
 
 ## 指标现状
