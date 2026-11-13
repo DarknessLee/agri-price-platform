@@ -3,6 +3,24 @@
     <PageHeader title="模型监测" subtitle="监控模型精度衰减与特征分布漂移，支持模型对比与快速重训">
       <template #actions>
         <el-button :icon="Refresh" :loading="loading" @click="refreshAll">刷新</el-button>
+        <el-tooltip :disabled="canManage" content="暂无模型管理权限，无法执行重训" placement="top">
+          <span>
+            <el-button
+              type="primary"
+              :icon="RefreshRight"
+              :loading="retraining"
+              :disabled="!canManage"
+              @click="retrainDrifted"
+            >
+              {{ retraining ? '重训中' : '重训漂移模型' }}
+            </el-button>
+          </span>
+        </el-tooltip>
+        <span v-if="lastRetrain" class="muted retrain-result">
+          最近一次重训：成功 {{ lastRetrain.trained }} 组<template v-if="lastRetrain.failed">
+            · 失败 {{ lastRetrain.failed }} 组</template
+          >
+        </span>
       </template>
     </PageHeader>
 
@@ -222,7 +240,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, RefreshRight } from '@element-plus/icons-vue'
 import type { EChartsOption } from 'echarts'
 import PageHeader from '@/components/PageHeader.vue'
 import KpiCard from '@/components/KpiCard.vue'
@@ -275,6 +293,20 @@ interface CompareRow {
   trained_at?: string
 }
 
+interface RetrainItem {
+  variety: string
+  region: string
+  psi: number
+  mape: number
+  status: string
+}
+
+interface RetrainDriftedResult {
+  trained: number
+  failed: number
+  items: RetrainItem[]
+}
+
 const ALGORITHM_LABELS: Record<string, string> = {
   ensemble: '组合模型',
   gbr: '梯度提升',
@@ -303,6 +335,8 @@ const compareRows = ref<CompareRow[]>([])
 const compareLoading = ref(false)
 const compareMissing = ref(false)
 const trainingId = ref<number | null>(null)
+const retraining = ref(false)
+const lastRetrain = ref<RetrainDriftedResult | null>(null)
 
 const dicts = ref<MetaDicts | null>(null)
 
@@ -604,6 +638,24 @@ async function retrain(row: DriftItem) {
   }
 }
 
+async function retrainDrifted() {
+  if (!canManage.value) return
+  retraining.value = true
+  try {
+    const result = await api.post<RetrainDriftedResult>('/models/retrain-drifted', {
+      limit: 5,
+      window: 90,
+    })
+    lastRetrain.value = result
+    ElMessage.success(`已重训 ${result.trained} 组`)
+    await loadDrift()
+  } catch {
+    ElMessage.warning('数据服务暂不可用')
+  } finally {
+    retraining.value = false
+  }
+}
+
 onMounted(refreshAll)
 </script>
 
@@ -646,6 +698,11 @@ onMounted(refreshAll)
 .model-key {
   margin-top: 1px;
   font-size: 11px;
+}
+
+.retrain-result {
+  font-size: 12px;
+  line-height: 32px;
 }
 
 .compare-sub {

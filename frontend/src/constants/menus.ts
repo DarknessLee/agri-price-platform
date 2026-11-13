@@ -71,6 +71,7 @@ export const FALLBACK_MENUS: MenuNode[] = [
       { key: 'admin-base', title: '基础数据', path: '/admin/base', icon: 'Grid', permission: 'admin:base' },
       { key: 'admin-audit', title: '操作审计', path: '/admin/audit', icon: 'Memo', permission: 'admin:audit' },
       { key: 'admin-tasks', title: '任务调度', path: '/admin/tasks', icon: 'Timer', permission: 'admin:task' },
+      { key: 'admin-monitor', title: '系统监控', path: '/admin/monitor', icon: 'Monitor', permission: 'admin:task' },
       { key: 'open-api', title: '开放 API', path: '/open-api', icon: 'Connection' },
     ],
   },

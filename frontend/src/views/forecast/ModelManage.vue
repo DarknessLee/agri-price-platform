@@ -9,7 +9,7 @@
       <KpiCard label="平均方向准确率" :value="avgAccText" unit="%" icon="TrendCharts" tone="purple" hint="涨跌方向判断准确率" />
     </div>
 
-    <div class="page-card">
+    <div v-if="canManage" class="page-card">
       <div class="card-title">
         <span>模型训练</span>
         <span class="muted panel-hint">基于最新历史价格数据重新拟合，训练耗时与数据量相关</span>
@@ -132,6 +132,133 @@
       </el-table>
     </div>
 
+    <div class="page-card">
+      <div class="flex-between list-head">
+        <div class="card-title list-title">
+          <span>训练实验记录</span>
+        </div>
+        <div class="toolbar list-toolbar">
+          <el-select
+            v-model="runVarietyId"
+            clearable
+            filterable
+            placeholder="按品种筛选"
+            style="width: 150px"
+            @change="loadRuns"
+          >
+            <el-option
+              v-for="item in dicts?.varieties || []"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+          <el-select
+            v-model="runRegionId"
+            clearable
+            filterable
+            placeholder="按地区筛选"
+            style="width: 150px"
+            @change="loadRuns"
+          >
+            <el-option
+              v-for="item in dicts?.regions || []"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+          <span class="muted">最近 {{ fmtInt(runList.length) }} 条 · 最多 50 条</span>
+          <el-button :loading="runsLoading" @click="loadRuns">刷新</el-button>
+        </div>
+      </div>
+
+      <el-table v-loading="runsLoading" :data="runList" size="small" stripe max-height="420">
+        <el-table-column label="时间" width="150">
+          <template #default="{ row }">{{ fmtDateTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="模型" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="model-name">{{ row.name || row.key || '—' }}</div>
+            <div class="muted model-key mono">{{ row.key }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="算法" width="110" show-overflow-tooltip>
+          <template #default="{ row }">{{ algorithmText(row.algorithm) }}</template>
+        </el-table-column>
+        <el-table-column label="品种" width="90" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.variety || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="地区" width="96" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.region || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="触发方式" width="96" align="center">
+          <template #default="{ row }">{{ triggerLabel(row.trigger) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="88" align="center">
+          <template #default="{ row }">
+            <el-tag :type="runStatusTag(row.status)" size="small" effect="plain">
+              {{ row.status || '—' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="耗时" width="88" align="right">
+          <template #default="{ row }">{{ formatDuration(row.duration_ms) }}</template>
+        </el-table-column>
+        <el-table-column label="MAPE" width="82" align="right">
+          <template #default="{ row }">{{ metricOf(row, 'mape', 2, '%') }}</template>
+        </el-table-column>
+        <el-table-column label="方向准确率" width="100" align="right">
+          <template #default="{ row }">{{ metricOf(row, 'direction_acc', 1, '%') }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="76" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" @click="openRunDetail(row)">详情</el-button>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <el-empty description="暂无训练实验记录，完成一次模型训练后自动写入" :image-size="64" />
+        </template>
+      </el-table>
+    </div>
+
+    <el-drawer v-model="runDetailVisible" title="训练实验详情" size="520px" destroy-on-close>
+      <div v-if="runDetail" class="run-detail">
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="模型">
+            {{ runDetail.name || '—' }}<span class="muted mono">（{{ runDetail.key }}）</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="算法">{{ algorithmText(runDetail.algorithm) }}</el-descriptions-item>
+          <el-descriptions-item label="品种 / 地区">
+            {{ runDetail.variety || '—' }} · {{ runDetail.region || '—' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="版本">{{ runDetail.version || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="触发方式">{{ triggerLabel(runDetail.trigger) }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="runStatusTag(runDetail.status)" size="small" effect="plain">
+              {{ runDetail.status || '—' }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="耗时">{{ formatDuration(runDetail.duration_ms) }}</el-descriptions-item>
+          <el-descriptions-item label="样本量">{{ fmtInt(runDetail.rows) }}</el-descriptions-item>
+          <el-descriptions-item label="操作人">{{ runDetail.operator || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="时间">{{ fmtDateTime(runDetail.created_at) }}</el-descriptions-item>
+          <el-descriptions-item label="产物键">
+            <span class="mono">{{ runDetail.artifact_key || '—' }}</span>
+          </el-descriptions-item>
+        </el-descriptions>
+        <div class="dialog-section">
+          <div class="section-title">指标（metrics）</div>
+          <pre class="run-json mono">{{ jsonText(runDetail.metrics) }}</pre>
+        </div>
+        <div class="dialog-section">
+          <div class="section-title">参数（params）</div>
+          <pre class="run-json mono">{{ jsonText(runDetail.params) }}</pre>
+        </div>
+      </div>
+      <el-empty v-else description="实验记录不存在" :image-size="72" />
+    </el-drawer>
+
     <el-dialog v-model="backtestVisible" :title="backtestTitle" width="880px" top="6vh" destroy-on-close>
       <div v-loading="backtestLoading" class="backtest-body">
         <template v-if="backtest">
@@ -240,6 +367,38 @@ interface TrainedModel {
   trained_at?: string
 }
 
+interface ModelRunMetrics {
+  mape?: number
+  rmse?: number
+  direction_acc?: number
+  rows?: number
+}
+
+interface ModelRun {
+  id: number
+  model_id?: number
+  key: string
+  name?: string
+  algorithm?: string
+  variety?: string
+  region?: string
+  version?: string
+  trigger?: string
+  status?: string
+  params?: Record<string, unknown> | string | null
+  metrics?: ModelRunMetrics | string | null
+  rows?: number
+  duration_ms?: number | null
+  artifact_key?: string
+  operator?: string
+  created_at?: string
+}
+
+interface ModelRunResponse {
+  list?: ModelRun[]
+  total?: number
+}
+
 const auth = useAuthStore()
 const canManage = computed(() => auth.hasPerm('model:manage'))
 
@@ -258,6 +417,92 @@ const backtestLoading = ref(false)
 const backtestModel = ref<ModelRow | null>(null)
 const backtest = ref<BacktestData | null>(null)
 const activatingId = ref<number | null>(null)
+
+const runList = ref<ModelRun[]>([])
+const runsLoading = ref(false)
+const runVarietyId = ref<number | null>(null)
+const runRegionId = ref<number | null>(null)
+const runDetailVisible = ref(false)
+const runDetail = ref<ModelRun | null>(null)
+
+const ALGORITHM_LABELS: Record<string, string> = {
+  ensemble: '组合模型',
+  gbr: '梯度提升',
+  seasonal: '季节分解',
+  holt_winters: 'Holt-Winters',
+}
+
+const TRIGGER_LABELS: Record<string, string> = {
+  manual: '手动训练',
+  scheduled: '定时重训',
+  auto: '自动重训',
+  drift: '漂移重训',
+  retrain: '重训',
+}
+
+function algorithmText(algorithm?: string): string {
+  if (!algorithm) return '—'
+  return ALGORITHM_LABELS[algorithm] || algorithm
+}
+
+function triggerLabel(trigger?: string): string {
+  if (!trigger) return '—'
+  return TRIGGER_LABELS[trigger] || trigger
+}
+
+function runStatusTag(status?: string): 'success' | 'danger' | 'warning' | 'info' {
+  if (!status) return 'info'
+  if (['成功', '已完成', 'success', 'done'].includes(status)) return 'success'
+  if (['失败', 'failed', 'error'].includes(status)) return 'danger'
+  if (['训练中', '运行中', 'running', 'pending', '排队中'].includes(status)) return 'warning'
+  return 'info'
+}
+
+function formatDuration(duration?: number | null): string {
+  if (duration == null || !Number.isFinite(Number(duration))) return '—'
+  const value = Number(duration)
+  if (value < 1000) return `${fmtInt(value)} ms`
+  return `${fmtNum(value / 1000, 2)} s`
+}
+
+function metricsObject(metrics: ModelRun['metrics']): Record<string, number> {
+  if (!metrics) return {}
+  if (typeof metrics === 'string') {
+    try {
+      return JSON.parse(metrics) as Record<string, number>
+    } catch {
+      return {}
+    }
+  }
+  return metrics as Record<string, number>
+}
+
+function metricOf(row: ModelRun, key: string, digits: number, suffix = ''): string {
+  const value = metricsObject(row.metrics)[key]
+  if (value == null || !Number.isFinite(Number(value))) return '—'
+  return `${fmtNum(Number(value), digits)}${suffix}`
+}
+
+function jsonText(value: unknown): string {
+  if (value == null || value === '') return '—'
+  if (typeof value === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2) ?? value
+    } catch {
+      return value
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value)
+  } catch {
+    return '—'
+  }
+}
+
+function openRunDetail(row: ModelRun) {
+  runDetail.value = row
+  runDetailVisible.value = true
+}
 
 const activeCount = computed(() => models.value.filter((item) => item.is_active).length)
 
@@ -414,6 +659,22 @@ const featureOption = computed<EChartsOption>(() => {
   }
 })
 
+async function loadRuns() {
+  runsLoading.value = true
+  try {
+    const params: Record<string, unknown> = { limit: 50 }
+    if (runVarietyId.value) params.variety_id = runVarietyId.value
+    if (runRegionId.value) params.region_id = runRegionId.value
+    const data = await api.get<ModelRunResponse>('/models/runs', params)
+    runList.value = data?.list || []
+  } catch {
+    runList.value = []
+    ElMessage.warning('数据服务暂不可用')
+  } finally {
+    runsLoading.value = false
+  }
+}
+
 async function loadDicts() {
   dicts.value = await api.get<MetaDicts>('/meta/dicts')
 }
@@ -444,7 +705,7 @@ async function trainModels() {
     const trained = await api.post<TrainedModel>('/models/train', payload)
     trainSummary.value = trained
     ElMessage.success(`训练完成：${trained.name}`)
-    await loadModels()
+    await Promise.all([loadModels(), loadRuns()])
   } catch {
     ElMessage.warning('数据服务暂不可用')
   } finally {
@@ -490,7 +751,7 @@ async function openBacktest(row: ModelRow) {
 }
 
 onMounted(async () => {
-  const tasks = await Promise.allSettled([loadDicts(), loadModels()])
+  const tasks = await Promise.allSettled([loadDicts(), loadModels(), loadRuns()])
   if (tasks.some((item) => item.status === 'rejected')) {
     ElMessage.warning('数据服务暂不可用')
   }
@@ -603,5 +864,25 @@ onMounted(async () => {
   font-size: 14px;
   font-weight: 600;
   color: #1c2a3a;
+}
+
+.run-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.run-json {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 260px;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid #e9eef7;
+  background: #f7f9fd;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 </style>

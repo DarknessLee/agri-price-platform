@@ -128,6 +128,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '任务调度', group: '系统管理', permission: 'admin:task', icon: 'Timer' },
       },
       {
+        path: 'admin/monitor',
+        name: 'admin-monitor',
+        component: () => import('@/views/admin/Monitor.vue'),
+        meta: { title: '系统监控', group: '系统管理', permission: 'admin:task', icon: 'Monitor' },
+      },
+      {
         path: 'open-api',
         name: 'open-api',
         component: () => import('@/views/OpenApi.vue'),
