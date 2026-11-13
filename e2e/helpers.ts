@@ -97,6 +97,7 @@ export const ROUTES = [
   { path: '/admin/base', title: '基础数据' },
   { path: '/admin/audit', title: '操作审计' },
   { path: '/admin/tasks', title: '任务调度' },
+  { path: '/admin/monitor', title: '系统监控' },
   { path: '/open-api', title: '开放 API' },
   { path: '/screen', title: '数据大屏' },
 ]

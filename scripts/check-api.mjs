@@ -645,6 +645,82 @@ print("cleaned")
     checker.check('观察员访问调用方管理被拒绝（E4030）', denied.code === 'E4030', `code=${denied.code}`)
   })
 
+  // ---------- M3. 调度、可观测性、对象存储与实验跟踪 ----------
+  await section('M3 增强：调度运行史与任务执行', async () => {
+    const tasks = await callApi('/api/tasks', { token: adminAuth.token })
+    checker.check('GET /api/tasks 返回任务列表', tasks.code === '0' && Array.isArray(tasks.data) && tasks.data.length >= 5, `code=${tasks.code} len=${tasks.data?.length}`)
+    const first = Array.isArray(tasks.data) ? tasks.data[0] : null
+    checker.check('任务含 cron_text 与 next_run_at', Boolean(first?.cron_text && first?.next_run_at !== undefined), JSON.stringify(first)?.slice(0, 200))
+
+    const syncTask = (Array.isArray(tasks.data) ? tasks.data : []).find((item) => item.key === 'sync_price')
+    if (syncTask) {
+      const run = await callApi(`/api/tasks/${syncTask.id}/run`, { method: 'POST', token: adminAuth.token, body: {} })
+      checker.check('POST /api/tasks/{id}/run 触发执行并返回运行记录', run.code === '0' && Boolean(run.data?.run_id) && ['成功', '失败'].includes(run.data?.status), JSON.stringify(run.data)?.slice(0, 200))
+      const runs = await callApi(`/api/tasks/${syncTask.id}/runs?page=1&page_size=10`, { token: adminAuth.token })
+      checker.check('GET /api/tasks/{id}/runs 返回该任务运行史', runs.code === '0' && Number(runs.data?.total) >= 1 && Array.isArray(runs.data?.list), `total=${runs.data?.total}`)
+    }
+    const globalRuns = await callApi('/api/tasks/runs?page=1&page_size=10', { token: adminAuth.token })
+    checker.check('GET /api/tasks/runs 返回全局运行史', globalRuns.code === '0' && Number(globalRuns.data?.total) >= 10, `total=${globalRuns.data?.total}`)
+
+    const tick = await callApi('/api/tasks/tick', { method: 'POST', token: adminAuth.token, body: {} })
+    checker.check('POST /api/tasks/tick 返回到期检查结果', tick.code === '0' && tick.data?.checked !== undefined && tick.data?.triggered !== undefined, JSON.stringify(tick.data)?.slice(0, 200))
+  })
+
+  await section('M3 增强：日志、指标与服务状态', async () => {
+    const logs = await callApi('/api/logs?limit=20', { token: adminAuth.token })
+    checker.check('GET /api/logs 返回结构化日志', logs.code === '0' && Array.isArray(logs.data?.list) && logs.data.list.length > 0, `len=${logs.data?.list?.length}`)
+    const logRow = logs.data?.list?.[0]
+    checker.check('日志行含 level/path/ts 字段', Boolean(logRow?.level && logRow?.ts), JSON.stringify(logRow)?.slice(0, 160))
+    checker.check('日志返回文件统计', logs.data?.stats?.path !== undefined && logs.data?.stats?.total_bytes >= 0)
+
+    const summary = await callApi('/api/metrics/summary?minutes=30', { token: adminAuth.token })
+    checker.check('GET /api/metrics/summary 返回 QPS 与分位耗时', summary.code === '0' && summary.data?.qps !== undefined && summary.data?.p95_ms !== undefined && summary.data?.total > 0, JSON.stringify(summary.data)?.slice(0, 200))
+    checker.check('指标含缓存命中统计', Boolean(summary.data?.cache) && summary.data.cache.HIT !== undefined)
+    const series = await callApi('/api/metrics/timeseries?minutes=10', { token: adminAuth.token })
+    checker.check('GET /api/metrics/timeseries 返回分钟序列', series.code === '0' && Array.isArray(series.data) && series.data.length === 10, `len=${series.data?.length}`)
+
+    const status = await callApi('/api/system/status', { token: adminAuth.token })
+    const blocks = ['db', 'cache', 'storage', 'scheduler', 'mail', 'logs', 'metrics']
+    checker.check('GET /api/system/status 返回七块状态', status.code === '0' && blocks.every((key) => status.data?.[key] !== undefined), JSON.stringify(status.data)?.slice(0, 240))
+    const schedulerState = status.data?.scheduler
+    checker.check(
+      '调度器处于运行态',
+      schedulerState === 'ok' || schedulerState?.running === true || ['ok', 'paused'].includes(schedulerState?.status),
+      `scheduler=${JSON.stringify(schedulerState)}`,
+    )
+
+    const deniedLogs = await callApi('/api/logs', { token: viewerAuth.token })
+    checker.check('观察员访问日志被拒绝（E4030）', deniedLogs.code === 'E4030', `code=${deniedLogs.code}`)
+  })
+
+  await section('M3 增强：对象存储与邮件通道', async () => {
+    const storage = await callApi('/api/storage/health', { token: adminAuth.token })
+    checker.check('GET /api/storage/health 返回对象存储状态', storage.code === '0' && storage.data?.ok === true, JSON.stringify(storage.data)?.slice(0, 240))
+    checker.check('对象存储后端为上卷 MinIO（或显式降级）', ['minio', 'fs'].includes(storage.data?.backend) && storage.data?.bucket !== undefined, `backend=${storage.data?.backend} degraded=${storage.data?.degraded}`)
+
+    const mailLogs = await callApi('/api/mail/logs?page=1&page_size=5', { token: adminAuth.token })
+    checker.check('GET /api/mail/logs 返回邮件发送记录', mailLogs.code === '0' && Number(mailLogs.data?.total) >= 5, `total=${mailLogs.data?.total}`)
+
+    const mailTest = await callApi('/api/mail/test', { method: 'POST', token: adminAuth.token, body: {} })
+    checker.check('POST /api/mail/test 发送测试邮件', mailTest.code === '0' && mailTest.data?.sent === true, JSON.stringify(mailTest.data)?.slice(0, 200))
+
+    const deniedMail = await callApi('/api/mail/test', { method: 'POST', token: viewerAuth.token, body: {} })
+    checker.check('观察员发送测试邮件被拒绝（E4030）', deniedMail.code === 'E4030', `code=${deniedMail.code}`)
+  })
+
+  await section('M3 增强：模型实验记录与漂移重训', async () => {
+    const runs = await callApi('/api/models/runs?limit=20', { token: analystAuth.token })
+    checker.check('GET /api/models/runs 返回训练实验记录', runs.code === '0' && Number(runs.data?.total) >= 30 && Array.isArray(runs.data?.list), `total=${runs.data?.total}`)
+    const row = runs.data?.list?.[0]
+    checker.check('实验记录含 metrics/params/duration_ms', Boolean(row?.duration_ms !== undefined && row?.metrics && row?.params), JSON.stringify(row)?.slice(0, 200))
+
+    const drifted = await callApi('/api/models/retrain-drifted', { method: 'POST', token: adminAuth.token, body: { limit: 1, window: 90 } })
+    checker.check('POST /api/models/retrain-drifted 重训漂移模型', drifted.code === '0' && Number(drifted.data?.trained) >= 0 && Array.isArray(drifted.data?.items), JSON.stringify(drifted.data)?.slice(0, 240))
+
+    const denied = await callApi('/api/models/retrain-drifted', { method: 'POST', token: viewerAuth.token, body: { limit: 1 } })
+    checker.check('观察员重训模型被拒绝（E4030）', denied.code === 'E4030', `code=${denied.code}`)
+  })
+
   // ---------- 15. 分页与错误处理 ----------
   await section('分页与错误处理', async () => {
     const paged = ok('价格分页参数 page/page_size 生效', await callApi('/api/prices?page=2&page_size=5', { token: adminAuth.token }), (d) => d?.list?.length === 5 && d?.page === 2 && d?.page_size === 5)

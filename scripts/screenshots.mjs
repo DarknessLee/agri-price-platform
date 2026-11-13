@@ -44,6 +44,7 @@ const PAGES = [
   { path: '/admin/tasks', file: '18-任务调度.png' },
   { path: '/open-api', file: '19-开放API.png' },
   { path: '/screen', file: '21-数据大屏.png', prepare: { wait: 6000 } },
+  { path: '/admin/monitor', file: '22-系统监控.png', prepare: { wait: 5000 } },
 ]
 
 const backend = await startBackend({ port: 8017, logFile: path.join(ROOT, '.runtime', 'logs', 'backend-screenshots.log') })
@@ -166,7 +167,7 @@ try {
   backend.stop()
 }
 
-const ok = saved >= 21 && failedPages.length === 0
+  const ok = saved >= 22 && failedPages.length === 0
 if (failedPages.length > 0) console.log(`截图失败：${failedPages.join('；')}`)
 console.log(`截图目录：${SCREENSHOT_DIR}`)
 process.exit(report(saved, failedPages.length, startedAt) && ok ? 0 : 1)
