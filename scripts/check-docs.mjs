@@ -24,7 +24,6 @@ const requiredDocs = [
   'PLAN-MATRIX.md',
   'docs/方案解读卡.md',
   'docs/接口契约.md',
-  'docs/阶段报告-M1.md',
   'docs/用户手册.md',
   'docs/数据字典.md',
 ]
@@ -100,12 +99,11 @@ checker.check('接口契约覆盖全部核心端点（28 个）', missingPaths.l
 checker.check('接口契约定义统一响应与错误码', /code.*message.*data/.test(contract) && /E4[0-9]{3}/.test(contract))
 checker.check('接口契约定义 21 个权限点', (contract.match(/[a-z]+:(view|export|run|manage|handle|rule|generate|import|source|user|role|base|audit|task)/g) || []).length >= 21)
 
-// ---------- 5. 阶段报告与用户手册 ----------
-const report = read('docs/阶段报告-M1.md')
-checker.check('阶段报告含目标与范围', /目标/.test(report) && /范围/.test(report))
-checker.check('阶段报告含五道门禁结果', (report.match(/RESULT=(PASS|FAIL)/g) || []).length >= 5, `实际 ${(report.match(/RESULT=(PASS|FAIL)/g) || []).length} 条`)
-checker.check('阶段报告含已知限制与后续计划', /限制/.test(report) && /后续|下一步/.test(report))
-checker.check('阶段报告含性能或效果指标', /MAPE|响应|耗时/.test(report))
+// ---------- 5. 长期文档与用户手册 ----------
+// 阶段验收报告属于过程文档，交付后不再保留、也不纳入 git（见开发手册 01-工作流 §8）；
+// 长期留存的是 STATUS / DECISIONS / 接口契约 / 数据字典 / 用户手册等。
+checker.check('决策记录含编号决策项（>= 20 条）', (decisions.match(/^\|\s*D\d{2}\s*\|/gm) || []).length >= 20)
+checker.check('决策记录覆盖数据层与中间件取舍', /MySQL/.test(decisions) && /Redis/.test(decisions) && /MinIO/.test(decisions))
 
 const manual = read('docs/用户手册.md')
 checker.check('用户手册含登录与角色说明', /登录/.test(manual) && /角色/.test(manual))
@@ -143,7 +141,7 @@ const missingViews = routeImports.filter((rel) => !existsSync(path.join(ROOT, 'f
 checker.check('路由引用的视图文件全部存在', routeImports.length >= 19 && missingViews.length === 0, `缺少 ${missingViews.join(',')}`)
 
 // ---------- 8. 对外措辞与代码整洁 ----------
-const deliveredDocs = ['README.md', 'docs/用户手册.md', 'docs/接口契约.md', 'docs/阶段报告-M1.md', 'docs/数据字典.md']
+const deliveredDocs = ['README.md', 'docs/用户手册.md', 'docs/接口契约.md', 'docs/数据字典.md']
 const forbidden = /演示|(?<![情])模拟|[Dd]emo|[Mm]ock/
 const offenders = []
 for (const file of deliveredDocs) {

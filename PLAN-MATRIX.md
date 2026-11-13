@@ -2,7 +2,7 @@
 
 > 状态只用四种：`已实现` / `部分`（写清差什么）/ `暂缓`（写触发条件）/ `不做`（写理由）。
 > 依据《农产品价格预测分析系统开发书（草案）》章节。证据列指向可复核的位置：接口门禁用例（`npm run test:api`）、端到端用例（`npm run test:e2e`）、截图（`docs/screenshots/`）、实现文件。
-> 最近核对：M3（2026-11-13），五道门禁全 PASS（327 项断言），详见 `docs/阶段报告-M3.md`。
+> 最近核对：M3（2026-11-13），五道门禁全 PASS（324 项断言），详见 `STATUS.md`。
 
 | 能力/交付项 | 方案出处 | 状态 | 证据（用例/文档/截图） | 备注 |
 | --- | --- | --- | --- | --- |
@@ -50,5 +50,5 @@
 | 中间件：可观测性（替代 ELK/Prometheus） | §5.1 | 已实现 | `backend/app/logging_setup.py`（JSONL + request_id）、`services/metrics.py`（分钟桶）、`/api/logs`、`/api/metrics/*`、`/api/system/status`、截图 22 | 指标驻留内存（重启归零）、日志尾部检索；未接外部告警 |
 | 中间件：实验跟踪（替代 MLflow） | §5.1 | 已实现 | `model_run` 表、`services/experiments.py`、`/api/models/runs`、`/api/models/retrain-drifted`、`views/forecast/ModelManage.vue` 实验记录 | 记录算法/超参/指标/耗时/产物键；无 run 级 UI 对比矩阵 |
 | 中间件：Kafka/K8s/TimescaleDB | §5.1 | 暂缓 | `DECISIONS.md` D05/D15/D22/D23 | 触发条件：生产化部署、多实例并发与亿级时序数据；当前用后台线程 + compose + MySQL 聚合替代 |
-| 交付：一键启动/种子重建/备份/门禁/文档/截图 | §12 | 已实现 | `npm run dev`、`npm run seed`、`npm run backup`、`npm run gate`（五门禁 327 项断言）、14 份文档、24 张截图 | 见 `docs/阶段报告-M3.md` |
+| 交付：一键启动/种子重建/备份/门禁/文档/截图 | §12 | 已实现 | `npm run dev`、`npm run seed`、`npm run backup`、`npm run gate`（五门禁 324 项断言）、10 份长期文档、24 张截图 | 见 `STATUS.md` |
 | 软著登记材料（60 页源码+手册+申请表） | 案例复盘 §17.8 | 不做 | — | 默认不做；如需要另行立项 |

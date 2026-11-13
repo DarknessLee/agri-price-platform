@@ -1,7 +1,7 @@
 # 当前状态（STATUS）
 
 - 项目/版本：农产品价格预测分析系统 V1.0（`agri-price-platform`）
-- 当前阶段：M3 完成（基础设施增强：调度与任务运行史、对象存储、可观测性与邮件通道、模型实验跟踪与备份；五道门禁 327 项通过）
+- 当前阶段：M3 完成（基础设施增强：调度与任务运行史、对象存储、可观测性与邮件通道、模型实验跟踪与备份；五道门禁 324 项通过）
 - 最近更新：2026-11-13
 - 当前分支：`master`（远端 `gitea` + `github`，`git pushall` 同时推送）
 - 运行入口：`npm run infra:up`（MySQL 13306 / Redis 16379 / MinIO 9000-9001 / Mailpit 1025-8025 就绪检查）→ `npm run seed` → `npm run dev` → 前端 `http://127.0.0.1:5177`、后端 `http://127.0.0.1:8017`
@@ -18,15 +18,15 @@
 | 数据库 | `npm run db:validate` | `RESULT=PASS passed=40 failed=0 用时=1s` |
 | 接口 | `npm run test:api` | `RESULT=PASS passed=212 failed=0 用时=22s` |
 | 端到端 | `npm run test:e2e` | `RESULT=PASS passed=21 failed=0 用时=60s` |
-| 文档 | `npm run check:docs` | `RESULT=PASS passed=42 failed=0 用时=0.0s` |
-| 汇总 | `npm run gate` | `RESULT=PASS passed=327 failed=0 用时=99s` |
+| 文档 | `npm run check:docs` | `RESULT=PASS passed=39 failed=0 用时=0.0s` |
+| 汇总 | `npm run gate` | `RESULT=PASS passed=324 failed=0 用时=92s` |
 
 一键复跑：`npm run gate`（串行执行五道门禁，任一失败即停止并保留日志于 `.runtime/artifacts/`）。
 
 ## 交付物
 
 - 代码：`backend/`（FastAPI，30 张表、14 路由模块、15 服务模块，MySQL 存储 + Redis 缓存/限流 + MinIO 对象存储 + 进程内调度器）、`frontend/`（Vue3 + TS，25 视图，含数据大屏与系统监控）、`scripts/`（门禁、压测、备份、启动与数据服务脚本）、`e2e/`（Playwright 用例）、`deploy/docker-compose.yml`（MySQL / Redis / MinIO / Mailpit 编排）
-- 文档：`README.md`、`docs/方案解读卡.md`、`docs/接口契约.md`、`docs/接口契约-M2.md`、`docs/接口契约-M3.md`、`docs/用户手册.md`、`docs/数据字典.md`、`docs/阶段报告-M1.md`、`docs/阶段报告-M2.md`、`docs/阶段报告-M3.md`、`DECISIONS.md`、`PLAN-MATRIX.md`
+- 文档：`README.md`、`STATUS.md`、`DECISIONS.md`、`PLAN-MATRIX.md`、`docs/方案解读卡.md`、`docs/接口契约.md`、`docs/接口契约-M2.md`、`docs/接口契约-M3.md`、`docs/用户手册.md`、`docs/数据字典.md`（阶段验收报告为过程文档，已按手册清理且不纳入 git）
 - 证据：`docs/screenshots/`（24 张界面截图，含数据大屏、模型监测、系统监控、权限隔离）、`.runtime/artifacts/`（门禁日志、E2E 报告）、`.runtime/backups/`（备份产物）
 
 ## 指标现状
