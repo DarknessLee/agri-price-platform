@@ -236,6 +236,27 @@ def health() -> dict:
     }
 
 
+def count_objects(limit: int = 2000) -> int:
+    """统计桶内对象数量（达到 limit 即返回，避免大桶全量列举拖慢监控页）。"""
+    client = _resolve_client()
+    if client is not None:
+        try:
+            total = 0
+            for _ in client.list_objects(STORAGE_BUCKET, recursive=True):
+                total += 1
+                if total >= limit:
+                    return limit
+            return total
+        except Exception:  # pragma: no cover - 列举失败时回退本地计数
+            pass
+    try:
+        if not STORAGE_ROOT.exists():
+            return 0
+        return sum(1 for p in STORAGE_ROOT.rglob("*") if p.is_file())
+    except Exception:  # pragma: no cover
+        return 0
+
+
 def report_key(report_id: int, report_type: str) -> str:
     """报告正文的对象键，保持与历史文件名一致，便于迁移。"""
     return f"reports/report_{int(report_id)}_{report_type}.html"

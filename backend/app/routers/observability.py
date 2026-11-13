@@ -134,7 +134,6 @@ def system_status(_user: CurrentUser):
 def storage_health(_user: Any = Depends(require_permission("admin:task"))):
     """对象存储健康态（契约 §5）：MinIO 不可用时返回 degraded 与具体错误。"""
     from .. import storage
-    from ..config import STORAGE_ROOT
 
     try:
         info = dict(storage.health())
@@ -148,14 +147,11 @@ def storage_health(_user: Any = Depends(require_permission("admin:task"))):
             "degraded": True,
             "error": f"{type(exc).__name__}: {exc}",
         }
-    # 概要统计本地回退目录中的对象数量；MinIO 模式不做全量列举，避免慢请求
-    object_count = 0
-    if str(info.get("backend") or "") == "fs":
-        try:
-            if STORAGE_ROOT.exists():
-                object_count = sum(1 for p in STORAGE_ROOT.rglob("*") if p.is_file())
-        except Exception:  # pragma: no cover
-            object_count = 0
+    # 对象数量：MinIO 模式列举上限 2000，本地回退目录统计文件数，避免慢请求
+    try:
+        object_count = storage.count_objects()
+    except Exception:  # pragma: no cover - 统计兜底
+        object_count = 0
     return ok({**info, "object_count": object_count})
 
 
