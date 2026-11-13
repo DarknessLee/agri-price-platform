@@ -29,3 +29,4 @@
 | D25 | 2026-11-13 | 邮件通道用 Python `smtplib` + 本地 Mailpit 收件箱（Docker，1025/8025），发送记录写 `sys_email_log`，按通知等级规则触发 | 验证链路需要可观察的收件端；Mailpit 单容器、无外网依赖；真实 SMTP 只需改 `MAIL_HOST/MAIL_PORT` 环境变量 | 邮件服务、通知模块、系统监控页 |
 | D26 | 2026-11-13 | 模型实验跟踪用 `model_run` 表记录每次训练的算法/超参/指标/样本量/耗时/产物键，提供 `/api/models/runs` 与一键重训漂移模型，替代 MLflow | MLflow 需独立服务与存储后端；实验表 + 页面即可满足可复现、可对比、可追溯三要素 | 实验跟踪模块、模型管理页 |
 | D27 | 2026-11-13 | 备份为脚本级：`scripts/backup.mjs` 用 mysqldump 导出结构与数据，附关键表行数与对象存储清单，保留最近 7 份（`npm run backup`） | 验收需要可验证的备份产物；脚本贴近运维习惯，无需额外备份软件，恢复演练可在临时库完成 | 备份脚本、README、用户手册 |
+| D28 | 2026-11-13 | 开发书第 12 节的 13 项交付物统一放 `deliverables/`，由 `scripts/deliverables.mjs` 校验齐全性与行数、`scripts/package.mjs` 生成源码与部署包 zip；阶段验收报告等过程文档不保留、不入 git（依据开发手册 `01-工作流.md` §8） | 交付物需与代码同版本、可复核；过程报告随阶段失效，长期保留会误导评审；脚本化校验避免文档与实现漂移 | `deliverables/`、`README.md`、`STATUS.md`、`scripts/deliverables.mjs`、`scripts/package.mjs` |

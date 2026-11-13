@@ -1,7 +1,7 @@
 # 当前状态（STATUS）
 
 - 项目/版本：农产品价格预测分析系统 V1.0（`agri-price-platform`）
-- 当前阶段：M3 完成（基础设施增强：调度与任务运行史、对象存储、可观测性与邮件通道、模型实验跟踪与备份；五道门禁 324 项通过）
+- 当前阶段：M3 完成（基础设施增强：调度与任务运行史、对象存储、可观测性与邮件通道、模型实验跟踪与备份；五道门禁 324 项通过）；已按开发书第 12 节补齐 13 项交付物（`deliverables/`）
 - 最近更新：2026-11-13
 - 当前分支：`master`（远端 `gitea` + `github`，`git pushall` 同时推送）
 - 运行入口：`npm run infra:up`（MySQL 13306 / Redis 16379 / MinIO 9000-9001 / Mailpit 1025-8025 就绪检查）→ `npm run seed` → `npm run dev` → 前端 `http://127.0.0.1:5177`、后端 `http://127.0.0.1:8017`
@@ -27,6 +27,7 @@
 
 - 代码：`backend/`（FastAPI，30 张表、14 路由模块、15 服务模块，MySQL 存储 + Redis 缓存/限流 + MinIO 对象存储 + 进程内调度器）、`frontend/`（Vue3 + TS，25 视图，含数据大屏与系统监控）、`scripts/`（门禁、压测、备份、启动与数据服务脚本）、`e2e/`（Playwright 用例）、`deploy/docker-compose.yml`（MySQL / Redis / MinIO / Mailpit 编排）
 - 文档：`README.md`、`STATUS.md`、`DECISIONS.md`、`PLAN-MATRIX.md`、`docs/方案解读卡.md`、`docs/接口契约.md`、`docs/接口契约-M2.md`、`docs/接口契约-M3.md`、`docs/用户手册.md`、`docs/数据字典.md`（阶段验收报告为过程文档，已按手册清理且不纳入 git）
+- 交付物包：`deliverables/`（开发书 §12 的 13 项：需求规格、系统设计、数据库设计、接口文档、数据治理规范、模型训练与回测报告、测试报告、安全与合规说明、部署运维手册、用户操作手册、培训材料、源码与部署包、验收报告），`npm run package:zip` 重新生成 `12-源码与部署包.zip`，`npm run deliverables` 校验齐全性与行数（51 项断言）
 - 证据：`docs/screenshots/`（24 张界面截图，含数据大屏、模型监测、系统监控、权限隔离）、`.runtime/artifacts/`（门禁日志、E2E 报告）、`.runtime/backups/`（备份产物）
 
 ## 指标现状
