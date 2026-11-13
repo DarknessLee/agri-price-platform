@@ -25,7 +25,7 @@
 
 ## 交付物
 
-- 代码：`backend/`（FastAPI，30 张表、13 路由模块、14 服务模块，MySQL 存储 + Redis 缓存/限流 + MinIO 对象存储 + 进程内调度器）、`frontend/`（Vue3 + TS，25 视图，含数据大屏与系统监控）、`scripts/`（门禁、压测、备份、启动与数据服务脚本）、`e2e/`（Playwright 用例）、`deploy/docker-compose.yml`（MySQL / Redis / MinIO / Mailpit 编排）
+- 代码：`backend/`（FastAPI，30 张表、14 路由模块、15 服务模块，MySQL 存储 + Redis 缓存/限流 + MinIO 对象存储 + 进程内调度器）、`frontend/`（Vue3 + TS，25 视图，含数据大屏与系统监控）、`scripts/`（门禁、压测、备份、启动与数据服务脚本）、`e2e/`（Playwright 用例）、`deploy/docker-compose.yml`（MySQL / Redis / MinIO / Mailpit 编排）
 - 文档：`README.md`、`docs/方案解读卡.md`、`docs/接口契约.md`、`docs/接口契约-M2.md`、`docs/接口契约-M3.md`、`docs/用户手册.md`、`docs/数据字典.md`、`docs/阶段报告-M1.md`、`docs/阶段报告-M2.md`、`docs/阶段报告-M3.md`、`DECISIONS.md`、`PLAN-MATRIX.md`
 - 证据：`docs/screenshots/`（24 张界面截图，含数据大屏、模型监测、系统监控、权限隔离）、`.runtime/artifacts/`（门禁日志、E2E 报告）、`.runtime/backups/`（备份产物）
 
