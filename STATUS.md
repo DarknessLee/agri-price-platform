@@ -1,32 +1,33 @@
 # 当前状态（STATUS）
 
 - 项目/版本：农产品价格预测分析系统 V1.0（`agri-price-platform`）
-- 当前阶段：M2 完成（增强能力落地：模型漂移监控、批量预测异步化、通知中心与处置 SLA、报告 Excel、开放 API 密钥限流、数据大屏；五道门禁通过）
-- 最近更新：2026-11-12
+- 当前阶段：M3 完成（基础设施增强：调度与任务运行史、对象存储、可观测性与邮件通道、模型实验跟踪与备份；五道门禁 327 项通过）
+- 最近更新：2026-11-13
 - 当前分支：`master`（远端 `gitea` + `github`，`git pushall` 同时推送）
-- 运行入口：`npm run infra:up`（MySQL 13306 / Redis 16379 就绪检查）→ `npm run dev` → 前端 `http://127.0.0.1:5177`、后端 `http://127.0.0.1:8017`
-- 数据重建：`npm run seed`（清空 MySQL 库 `agri_price` 并重建 84,660 条价格、31,380 条特征、120 个模型版本、19 条站内通知与开放 API 调用流水）
-- 技术栈：Vue 3 + TypeScript + ECharts 前端；FastAPI + SQLAlchemy + MySQL 8 后端；Redis 7 缓存、限流与令牌黑名单（均支持降级）；SQLite 作为无 Docker 环境的回退存储
+- 运行入口：`npm run infra:up`（MySQL 13306 / Redis 16379 / MinIO 9000-9001 / Mailpit 1025-8025 就绪检查）→ `npm run seed` → `npm run dev` → 前端 `http://127.0.0.1:5177`、后端 `http://127.0.0.1:8017`
+- 数据重建：`npm run seed`（清空 MySQL 库 `agri_price` 并重建 84,660 条价格、31,380 条特征、120 个模型版本、19 条站内通知、10 条任务运行史、5 条邮件记录与开放 API 调用流水）
+- 数据备份：`npm run backup`（mysqldump + 对象清单 + 关键表行数，保留最近 7 份于 `.runtime/backups/`）
+- 技术栈：Vue 3 + TypeScript + ECharts 前端；FastAPI + SQLAlchemy + MySQL 8 后端；Redis 7 缓存、限流与令牌黑名单；MinIO（S3）对象存储；Mailpit 收件箱（均支持降级）；SQLite 作为无 Docker 环境的回退存储
 - 内置账号：`admin/Admin@2026`、`analyst01/Analyst@2026`、`operator01/Operator@2026`、`viewer01/Viewer@2026`
 
 ## 最近验收
 
 | 门禁 | 命令 | 结果 |
 | --- | --- | --- |
-| 构建 | `npm run build` | `RESULT=PASS passed=12 failed=0 用时=18s` |
-| 数据库 | `npm run db:validate` | `RESULT=PASS passed=37 failed=0 用时=1s` |
-| 接口 | `npm run test:api` | `RESULT=PASS passed=188 failed=0 用时=19s` |
-| 端到端 | `npm run test:e2e` | `RESULT=PASS passed=21 failed=0 用时=54s` |
+| 构建 | `npm run build` | `RESULT=PASS passed=12 failed=0 用时=16s` |
+| 数据库 | `npm run db:validate` | `RESULT=PASS passed=40 failed=0 用时=1s` |
+| 接口 | `npm run test:api` | `RESULT=PASS passed=212 failed=0 用时=22s` |
+| 端到端 | `npm run test:e2e` | `RESULT=PASS passed=21 failed=0 用时=60s` |
 | 文档 | `npm run check:docs` | `RESULT=PASS passed=42 failed=0 用时=0.0s` |
-| 汇总 | `npm run gate` | `RESULT=PASS passed=300 failed=0 用时=92s` |
+| 汇总 | `npm run gate` | `RESULT=PASS passed=327 failed=0 用时=99s` |
 
 一键复跑：`npm run gate`（串行执行五道门禁，任一失败即停止并保留日志于 `.runtime/artifacts/`）。
 
 ## 交付物
 
-- 代码：`backend/`（FastAPI，27 表、12 路由模块、12 服务模块，MySQL 存储 + Redis 缓存/限流）、`frontend/`（Vue3 + TS，24 视图，含数据大屏）、`scripts/`（门禁、压测、启动与数据服务脚本）、`e2e/`（Playwright 用例）、`deploy/docker-compose.yml`（数据服务编排）
-- 文档：`README.md`、`docs/方案解读卡.md`、`docs/接口契约.md`、`docs/接口契约-M2.md`、`docs/用户手册.md`、`docs/数据字典.md`、`docs/阶段报告-M1.md`、`docs/阶段报告-M2.md`、`DECISIONS.md`、`PLAN-MATRIX.md`
-- 证据：`docs/screenshots/`（23 张界面截图，含数据大屏、模型监测、权限隔离）、`.runtime/artifacts/`（门禁日志、E2E 报告）
+- 代码：`backend/`（FastAPI，30 张表、13 路由模块、14 服务模块，MySQL 存储 + Redis 缓存/限流 + MinIO 对象存储 + 进程内调度器）、`frontend/`（Vue3 + TS，25 视图，含数据大屏与系统监控）、`scripts/`（门禁、压测、备份、启动与数据服务脚本）、`e2e/`（Playwright 用例）、`deploy/docker-compose.yml`（MySQL / Redis / MinIO / Mailpit 编排）
+- 文档：`README.md`、`docs/方案解读卡.md`、`docs/接口契约.md`、`docs/接口契约-M2.md`、`docs/接口契约-M3.md`、`docs/用户手册.md`、`docs/数据字典.md`、`docs/阶段报告-M1.md`、`docs/阶段报告-M2.md`、`docs/阶段报告-M3.md`、`DECISIONS.md`、`PLAN-MATRIX.md`
+- 证据：`docs/screenshots/`（24 张界面截图，含数据大屏、模型监测、系统监控、权限隔离）、`.runtime/artifacts/`（门禁日志、E2E 报告）、`.runtime/backups/`（备份产物）
 
 ## 指标现状
 
@@ -35,12 +36,14 @@
 - 模型漂移（PSI 90/180 天）：30 个在用模型 4 平稳 / 18 关注 / 8 漂移，平均 PSI 0.2565
 - 批量预测：提交 0.029 s 返回，30 组合 × 14 天约 2.16 s；压测 1,800 点 4.27 s，外推 1 万点约 23.7 s（目标 ≤600 s）
 - 接口响应：驾驶舱 40~90 ms（缓存命中 <10 ms）、价格分页 30~60 ms、14 天预测 0.9~2.4 s、漂移接口缓存命中 0.059 s
-- 预警处置：SLA 24 小时，站内通知 7 条链路（扫描/确认/关闭/导入/训练/报告/任务）
+- 预警处置：SLA 24 小时，站内通知 7 条链路（扫描/确认/关闭/导入/训练/报告/任务），高等级预警与任务失败同步发信（Mailpit 收件箱可查）
+- 调度：5 条定时任务 cron 解析 + 到点触发 + 运行史（成功/失败/耗时），失败自动重试一次并通知
+- 可观测性：接口日志（request_id/耗时/状态/缓存命中）与分钟指标（QPS、P50/P95/P99、错误率、慢请求 Top）可在系统监控页查看
 
 ## 下一步
 
-1. 接入外部通知通道（邮件/企业微信）与通知偏好，替代站内单通道
-2. 漂移超阈值自动触发重训并通知，形成「监测—重训—通知」闭环
-3. 按评审意见补充外生变量与更强模型，重点提升 7 日与单日方向准确率（30 日趋势口径保持 ≥75%，14 日累计口径目标 ≥65%）
-4. 接入真实数据源适配器与增量同步（当前为 CSV 导入 + 种子数据）
-5. 生产化改造：PostgreSQL/TimescaleDB 时序扩展、分布式限流、对象存储、容器化部署与等保二级要求（MySQL + Redis 已在本机落地）
+1. 事件总线：Redis Streams 承载批量预测与通知，支持重试与死信队列（不引入 Kafka）
+2. 指标持久化：分钟指标写入 MySQL 并保留 7 天，结合慢查询与阈值告警
+3. 调度高可用：数据库租约锁 + 多实例抢占，避免重复触发
+4. 生产化改造：PostgreSQL/TimescaleDB 时序扩展、容器化应用镜像、对象存储生命周期策略、等保二级要求（MySQL + Redis + MinIO + Mailpit 已在本机落地）
+5. 接入真实数据源适配器与增量同步（当前为 CSV 导入 + 种子数据）

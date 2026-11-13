@@ -2,7 +2,7 @@
 
 > 状态只用四种：`已实现` / `部分`（写清差什么）/ `暂缓`（写触发条件）/ `不做`（写理由）。
 > 依据《农产品价格预测分析系统开发书（草案）》章节。证据列指向可复核的位置：接口门禁用例（`npm run test:api`）、端到端用例（`npm run test:e2e`）、截图（`docs/screenshots/`）、实现文件。
-> 最近核对：M2（2026-11-12），五道门禁全 PASS（300 项断言），详见 `docs/阶段报告-M2.md`。
+> 最近核对：M3（2026-11-13），五道门禁全 PASS（327 项断言），详见 `docs/阶段报告-M3.md`。
 
 | 能力/交付项 | 方案出处 | 状态 | 证据（用例/文档/截图） | 备注 |
 | --- | --- | --- | --- | --- |
@@ -38,13 +38,17 @@
 | 交互：站内通知中心 | §4.5 | 已实现 | `sys_notification`、`/api/notifications/*`、`components/NotificationBell.vue`、test:api 通知段 | 7 条产生链路；未接外部短信/邮件通道 |
 | 后台：用户/角色/机构/菜单/审计 | §4.7 | 已实现 | `/api/users`、`/api/roles`、`/api/audit-logs`、截图 14/15/17 | 机构为字段级，菜单按权限动态过滤 |
 | 后台：数据源/品种/地区/指标/规则配置 | §4.7 | 已实现 | `/api/sources`、`/api/admin/*`、截图 11/16 | 市场主数据只读 |
-| 后台：任务调度/系统监控 | §4.7 | 部分 | `/api/tasks`、`/api/system/info`、截图 18 | 5 个内置任务可手动执行；监控为应用内指标，无外部告警 |
-| 非功能：查询 ≤3 秒 | §6 | 已实现 | test:api 全量 188 断言 19 s；驾驶舱 40~90 ms（缓存命中 <10 ms）；漂移接口缓存命中 0.059 s | 本机 MySQL 8 + Redis 7，数据量 8 万级 |
+| 后台：任务调度/系统监控 | §4.7 | 已实现 | `backend/app/scheduler.py`（5 段 cron + 守护线程）、`services/tasks.py`（真实执行 + 失败重试）、`/api/tasks/runs`、`/api/tasks/tick`、`views/admin/Monitor.vue`、截图 18/22、test:api 调度与监控段 | 5 个任务到点自动触发、运行史可查；监控含接口指标、日志检索、服务状态与测试邮件；外部告警渠道未接入 |
+| 非功能：查询 ≤3 秒 | §6 | 已实现 | test:api 全量 212 断言 22 s；驾驶舱 40~90 ms（缓存命中 <10 ms）；漂移接口缓存命中 0.059 s；对象存储读取 12~30 ms | 本机 MySQL 8 + Redis 7 + MinIO，数据量 8 万级 |
 | 非功能：批量预测 1 万条 ≤10 分钟 | §6 | 已实现 | `scripts/perf-batch.mjs`：1,800 点 4.27 s → 421 点/秒，外推 1 万点 ≈ 23.7 s | 后台线程异步执行；若需严格实测 1 万点，可调大组合数与 horizon 后复跑脚本 |
 | 非功能：可用性 99.5% | §6 | 部分 | 单机部署说明、`.runtime/logs/` | 无多副本与故障转移 |
 | 安全：认证/RBAC/审计/脱敏 | §6 | 已实现 | `security.py`、test:api 权限隔离段（4 角色）、截图 20 | 口令 PBKDF2、token 8 小时；敏感字段不落日志 |
 | 安全：传输加密与等保二级 | §2.2 | 部分 | 部署层可选 HTTPS | 未做等保测评与渗透测试 |
 | 中间件：Redis 热点缓存与令牌黑名单 | §5.1 | 已实现 | `backend/app/cache.py`、`X-Cache: HIT/MISS` 响应头、注销后旧 token 失效用例 | 驾驶舱/字典/性能接口缓存 30~300 s；不可用时自动降级直连 |
-| 中间件：Kafka/MinIO/MLflow/ELK/Prometheus/K8s | §5.1 | 暂缓 | `DECISIONS.md` D05/D15 | 触发条件：生产化部署与多实例并发 |
-| 交付：一键启动/种子重建/门禁/文档/截图 | §12 | 已实现 | `npm run dev`、`npm run seed`、`npm run gate`（五门禁 300 项断言）、11 份文档、23 张截图 | 见 `docs/阶段报告-M2.md` |
+| 中间件：对象存储（MinIO/S3） | §5.1 | 已实现 | `backend/app/storage.py`、桶 `agri-artifacts`、报告正文/模型产物/导入文件对象键、`/api/storage/health`、`scripts/backup.mjs` 对象清单 | MinIO 不可达时自动降级本地 FS（同一对象键）；Kafka/MLflow/ELK/Prometheus/K8s 以等价实现替代，见下三行 |
+| 中间件：调度（替代 Airflow） | §5.1 | 已实现 | `backend/app/scheduler.py`、`services/tasks.py`、`scheduled_task_run`、`/api/tasks/tick` | 进程内守护线程 + 数据库运行史；多实例需租约锁（已知限制） |
+| 中间件：可观测性（替代 ELK/Prometheus） | §5.1 | 已实现 | `backend/app/logging_setup.py`（JSONL + request_id）、`services/metrics.py`（分钟桶）、`/api/logs`、`/api/metrics/*`、`/api/system/status`、截图 22 | 指标驻留内存（重启归零）、日志尾部检索；未接外部告警 |
+| 中间件：实验跟踪（替代 MLflow） | §5.1 | 已实现 | `model_run` 表、`services/experiments.py`、`/api/models/runs`、`/api/models/retrain-drifted`、`views/forecast/ModelManage.vue` 实验记录 | 记录算法/超参/指标/耗时/产物键；无 run 级 UI 对比矩阵 |
+| 中间件：Kafka/K8s/TimescaleDB | §5.1 | 暂缓 | `DECISIONS.md` D05/D15/D22/D23 | 触发条件：生产化部署、多实例并发与亿级时序数据；当前用后台线程 + compose + MySQL 聚合替代 |
+| 交付：一键启动/种子重建/备份/门禁/文档/截图 | §12 | 已实现 | `npm run dev`、`npm run seed`、`npm run backup`、`npm run gate`（五门禁 327 项断言）、14 份文档、24 张截图 | 见 `docs/阶段报告-M3.md` |
 | 软著登记材料（60 页源码+手册+申请表） | 案例复盘 §17.8 | 不做 | — | 默认不做；如需要另行立项 |

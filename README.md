@@ -3,11 +3,12 @@
 面向农业主管部门、批发市场、合作社与金融机构的价格监测、短期预测、预警处置与决策支持平台。系统围绕「采集—治理—监测—预测—预警—决策支持」闭环，提供驾驶舱、价格监测分析、短期与批量预测、模型管理与漂移监测、预警规则与处置、情景推演、分析报告、数据治理、后台管理、开放 API 与数据大屏十二个业务模块，并配套站内通知中心。
 
 - 前端：Vue 3 + TypeScript + Vite + Element Plus + ECharts + Pinia
-- 后端：FastAPI + SQLAlchemy + MySQL 8.0 + Redis 7 + pandas / NumPy / scikit-learn / statsmodels
+- 后端：FastAPI + SQLAlchemy + MySQL 8.0 + Redis 7 + MinIO（S3 对象存储）+ pandas / NumPy / scikit-learn / statsmodels
 - 部署形态：单机 B/S，前后端分离，生产构建由后端统一托管静态资源
-- 数据服务：MySQL 承担业务数据存储（可切回内置 SQLite 文件库），Redis 承担热点缓存与令牌注销黑名单，两者均支持不可用时降级
+- 数据服务：MySQL 承担业务数据存储（可切回内置 SQLite 文件库），Redis 承担热点缓存、限流与令牌注销黑名单，MinIO 承担报告/模型产物/导入文件的对象存储，Mailpit 承担本地收件箱验证；四者均支持不可用时降级
 - 鉴权：HS256 JWT + PBKDF2 口令散列 + RBAC 权限点（21 个权限点、4 个内置角色）；开放 API 另支持调用方密钥 `X-Api-Key` 与按调用方限流（超限 429 / `E4290`）
 - 增强能力：模型漂移监控（PSI）、批量预测后台异步执行、站内通知中心与处置 SLA、报告 Excel 导出、开放 API 调用统计、全屏数据大屏
+- 基础设施能力：定时任务调度与运行史（cron 五段解析、失败重试）、对象存储、结构化日志与接口指标、邮件通道、模型实验跟踪、一键备份
 
 ## 环境要求
 
@@ -18,6 +19,8 @@
 | Docker（含 Compose 插件） | 20.10+ | 用于运行 MySQL 与 Redis；本机已有同名容器时可直接复用 |
 | MySQL | 8.0 | 容器 `127.0.0.1:13306`，库 `agri_price`，账号 `agri / Agri_2026` |
 | Redis | 7.x | 容器 `127.0.0.1:16379`，密码 `DataSec_2026`，库 0 |
+| MinIO | 社区版 | 对象存储 `127.0.0.1:9000`、控制台 `9001`，账号 `agri / Agri_2026_minio`，桶 `agri-artifacts`（镜像不可达时自动回退官方服务端二进制；再不可用降级本地 `frontend/../.runtime/storage`） |
+| Mailpit | 最新 | 本地收件箱 `127.0.0.1:1025`（SMTP）、`8025`（Web 界面） |
 | 浏览器 | Chromium 内核 120+ | 界面面向 1600×1000 及以上分辨率 |
 
 数据服务连接参数集中在 `backend/app/config.py`，也可用环境变量覆盖（`AGRI_DATABASE_URL`、`AGRI_REDIS_URL`、`AGRI_DB_BACKEND`）；设置 `AGRI_DB_BACKEND=sqlite` 时退化为 `.runtime/agri.db` 单文件库，无需 Docker 即可运行。
@@ -45,7 +48,7 @@ agri-price-platform/
 ## 快速开始
 
 ```bash
-# 1) 启动并检查数据服务（MySQL 13306 + Redis 16379；复用本机已有容器，缺失时提示用 compose 拉起）
+# 1) 启动并检查数据服务（MySQL 13306 / Redis 16379 / MinIO 9000-9001 / Mailpit 1025-8025；复用本机已有容器，缺失时提示用 compose 拉起）
 npm run infra:up
 
 # 2) 安装依赖
@@ -82,7 +85,8 @@ npm run gate
 
 | 命令 | 作用 |
 | --- | --- |
-| `npm run infra:up` | 检查并启动 MySQL/Redis，幂等准备业务库、账号与连通性 |
+| `npm run infra:up` | 检查并启动 MySQL/Redis/MinIO/Mailpit，幂等准备业务库、账号、桶与连通性 |
+| `npm run backup` | 导出 MySQL 结构与数据、关键表行数与对象清单到 `.runtime/backups/`，保留最近 7 份 |
 | `npm run infra:down` | 停止由 `deploy/docker-compose.yml` 启动的数据服务 |
 | `npm run dev` | 同时启动后端 8017 与前端 5177 |
 | `npm run build` | 前端类型检查 + 生产构建，产物输出到 `frontend/dist` |
@@ -126,7 +130,7 @@ RESULT=PASS passed=N failed=M 用时=Ss
 
 1. **构建时报 `esbuild ... Access is denied`**：本机系统临时目录清理受限，`npm run build` 已自动将 `TMP/TEMP` 指向 `frontend/.tmp`；手工执行时同样建议设置该环境变量。
 2. **控制台中文乱码**：Windows 控制台默认 GBK，执行脚本时设置 `PYTHONIOENCODING=utf-8`（门禁脚本已内置）。
-3. **数据服务未就绪**：执行 `npm run infra:up`；若提示容器不存在，用 `docker compose -f deploy/docker-compose.yml up -d` 启动并等待健康检查通过。
+3. **数据服务未就绪**：执行 `npm run infra:up`；若提示容器不存在，用 `docker compose -f deploy/docker-compose.yml up -d` 启动并等待健康检查通过。MinIO 镜像在部分网络下无法拉取，脚本会自动使用官方社区版服务端二进制，无需额外操作。
 4. **MySQL 连接被拒或库为空**：确认容器映射端口为 13306、库名为 `agri_price`；`npm run seed` 后可用 `npm run db:validate` 校验数据规模。
 5. **Redis 不可用**：接口会自动降级为直连数据库（健康检查 `cache` 字段显示 `error`），页面功能不受影响；恢复 Redis 后缓存自动重新填充。
 6. **数据库被占用**：停止占用 8017 端口的进程后重试 `npm run seed`；`.runtime/` 下的日志与导入产物可安全删除。
