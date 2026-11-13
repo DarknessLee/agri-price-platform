@@ -16,6 +16,8 @@
     "db:validate": "node scripts/db-validate.mjs",
     "screenshots": "node scripts/screenshots.mjs",
     "perf:batch": "node scripts/perf-batch.mjs",
+    "package:zip": "node scripts/package.mjs",
+    "deliverables": "node scripts/deliverables.mjs",
     "gate": "node scripts/gate.mjs"
   },
   "devDependencies": {
