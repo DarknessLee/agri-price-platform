@@ -10,8 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import APP_NAME, APP_VERSION, BASE_DIR
+from .config import APP_NAME, APP_VERSION, BASE_DIR, MAIL_ENABLED, MAIL_HOST, MAIL_PORT, SCHEDULER_ENABLED
 from .database import Base, SessionLocal, engine
+from .logging_setup import log_event, set_request_id
 from .security import ApiError
 
 STARTED_AT = time.time()
@@ -19,11 +20,18 @@ STARTED_AT = time.time()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    from . import scheduler
     from .seed import ensure_initialized
 
     Base.metadata.create_all(bind=engine)
     ensure_initialized()
-    yield
+    scheduler.start()
+    log_event("info", "app.start", version=APP_VERSION, scheduler=SCHEDULER_ENABLED)
+    try:
+        yield
+    finally:
+        scheduler.stop()
+        log_event("info", "app.stop")
 
 
 app = FastAPI(
@@ -65,46 +73,63 @@ async def unhandled_error_handler(request: Request, exc: Exception):
 @app.middleware("http")
 async def access_middleware(request: Request, call_next):
     started = time.time()
-    response = await call_next(request)
-    if request.url.path.startswith("/api/") and request.url.path not in {"/api/health"}:
+    request_id = f"{int(started * 1000) % 1000000:06d}-{id(request) % 100000:05d}"
+    set_request_id(request_id)
+    path = request.url.path
+    try:
+        response = await call_next(request)
+    except Exception:
         elapsed = (time.time() - started) * 1000
-        if elapsed > 800:
-            print(f"[slow] {request.method} {request.url.path} {elapsed:.0f}ms")
+        log_event("error", "request.exception", method=request.method, path=path, elapsed_ms=round(elapsed, 1))
+        raise
+    elapsed = (time.time() - started) * 1000
+    response.headers["X-Request-Id"] = request_id
+    if path.startswith("/api/"):
+        cache_state = response.headers.get("x-cache")
+        try:
+            from .services import metrics
+
+            metrics.record_request(request.method, path, response.status_code, elapsed, cache_state)
+        except Exception:  # 指标失败不影响请求
+            pass
+        if path != "/api/health":
+            log_event(
+                "info",
+                "request",
+                method=request.method,
+                path=path,
+                status=response.status_code,
+                elapsed_ms=round(elapsed, 1),
+                cache=cache_state or "",
+            )
+            if elapsed > 800:
+                log_event("warn", "request.slow", method=request.method, path=path, elapsed_ms=round(elapsed, 1))
     return response
 
 
 def _include_routers() -> None:
-    from .routers import (
-        admin,
-        alerts,
-        auth,
-        dashboard,
-        data_gov,
-        forecast,
-        meta,
-        model_mgmt,
-        notifications,
-        open_api,
-        prices,
-        reports,
-        scenarios,
-    )
+    import importlib
 
-    for module in (
-        auth,
-        meta,
-        dashboard,
-        prices,
-        forecast,
-        model_mgmt,
-        alerts,
-        scenarios,
-        reports,
-        data_gov,
-        admin,
-        notifications,
-        open_api,
+    for name in (
+        "auth",
+        "meta",
+        "dashboard",
+        "prices",
+        "forecast",
+        "model_mgmt",
+        "alerts",
+        "scenarios",
+        "reports",
+        "data_gov",
+        "admin",
+        "notifications",
+        "observability",
+        "open_api",
     ):
+        try:
+            module = importlib.import_module(f".routers.{name}", package=__package__)
+        except ModuleNotFoundError:  # 可选路由尚未交付时跳过，保证服务可启动
+            continue
         app.include_router(module.router, prefix="/api")
 
 
@@ -113,6 +138,7 @@ _include_routers()
 
 @app.get("/api/health")
 def health():
+    from . import scheduler, storage
     from .cache import cache_available
     from .database import SessionLocal
     from sqlalchemy import text
@@ -127,11 +153,24 @@ def health():
         cache_ok = cache_available()
     except Exception:  # pragma: no cover - 缓存探测兜底
         cache_ok = False
+    try:
+        storage_state = storage.health()
+    except Exception as exc:  # pragma: no cover
+        storage_state = {"configured": "", "backend": "fs", "ok": False, "degraded": True, "error": str(exc)}
+    mail_state = {
+        "enabled": MAIL_ENABLED,
+        "endpoint": f"{MAIL_HOST}:{MAIL_PORT}",
+        "web_ui": "http://127.0.0.1:8025" if MAIL_ENABLED else "",
+    }
     return {
         "status": "ok" if db_ok else "degraded",
         "version": APP_VERSION,
         "db": "ok" if db_ok else "error",
         "cache": "ok" if cache_ok else "error",
+        "storage": "ok" if (storage_state.get("ok") and not storage_state.get("degraded")) else "degraded",
+        "storage_backend": storage_state.get("backend", "fs"),
+        "scheduler": "ok" if scheduler.status().get("running") else "paused",
+        "mail": "ok" if MAIL_ENABLED else "paused",
         "uptime_seconds": int(time.time() - STARTED_AT),
     }
 

@@ -20,12 +20,13 @@ from ..models import (
     Role,
     RolePermission,
     ScheduledTask,
+    ScheduledTaskRun,
     User,
     Variety,
 )
 from ..responses import ok, page_args, paged
 from ..security import ApiError, CurrentUser, client_ip, hash_password, require_permission, write_audit
-from ..services import notification, quality
+from ..services import notification, quality, tasks as task_service
 
 router = APIRouter(tags=["后台管理"])
 
@@ -468,6 +469,7 @@ def _task_item(task: ScheduledTask) -> dict:
         "key": task.key,
         "name": task.name,
         "cron": task.cron,
+        "cron_text": _cron_text(task.cron),
         "status": task.status,
         "last_run_at": _fmt_time(task.last_run_at),
         "last_result": task.last_result,
@@ -476,34 +478,19 @@ def _task_item(task: ScheduledTask) -> dict:
     }
 
 
-def _run_task(db: Session, task: ScheduledTask) -> str:
-    """按任务 key 执行对应动作，返回执行结果文案。"""
-    from ..models import AlertRecord, PriceRecord as PriceModel
+def _cron_text(expr: str) -> str:
+    from .. import scheduler
 
-    key = task.key
-    if key == "sync_price":
-        total = int(db.execute(select(func.count(PriceModel.id))).scalar() or 0)
-        latest = db.execute(select(func.max(PriceModel.price_date))).scalar()
-        return f"价格数据同步完成：当前共 {total} 条价格记录，最新价格日期 {_fmt_time(latest) or '无'}"
-    if key == "alert_scan":
-        pending = int(
-            db.execute(
-                select(func.count(AlertRecord.id)).where(AlertRecord.status == "待处理")
-            ).scalar()
-            or 0
-        )
-        return f"预警规则扫描完成：当前待处理预警 {pending} 条"
-    if key == "model_retrain":
-        return "模型周度回训任务已提交，训练结果可在模型管理页面查看"
-    if key == "report_daily":
-        return "日报生成任务已执行，报告已归档至报告中心"
-    if key == "quality_check":
-        summary = quality.summary(db)
-        return (
-            f"数据质量巡检完成：完整率 {summary['completeness']}%，"
-            f"待处理异常 {summary['outlier_count']} 条，记录总数 {summary['total_records']}"
-        )
-    return "任务执行完成"
+    try:
+        return scheduler.describe(expr)
+    except Exception:  # pragma: no cover
+        return str(expr)
+
+
+def _run_task(db: Session, task: ScheduledTask, operator: str = "system", trigger: str = "手动") -> dict:
+    """执行任务并返回执行结果（真实动作由 services.tasks 承担）。"""
+    outcome = task_service.execute(db, task, trigger=trigger, operator=operator)
+    return outcome
 
 
 @router.get("/tasks")
@@ -512,8 +499,102 @@ def list_tasks(
     db: Session = Depends(get_db),
 ):
     """调度任务列表。"""
-    tasks = db.execute(select(ScheduledTask).order_by(ScheduledTask.id)).scalars().all()
-    return ok([_task_item(task) for task in tasks])
+    rows = db.execute(
+        select(ScheduledTask, func.count(ScheduledTaskRun.id))
+        .outerjoin(ScheduledTaskRun, ScheduledTaskRun.task_id == ScheduledTask.id)
+        .group_by(ScheduledTask.id)
+        .order_by(ScheduledTask.id)
+    ).all()
+    items = []
+    for task, runs in rows:
+        item = _task_item(task)
+        item["runs"] = int(runs or 0)
+        items.append(item)
+    return ok(items)
+
+
+@router.get("/tasks/runs")
+def list_all_runs(
+    status: str | None = Query(default=None),
+    key: str | None = Query(default=None),
+    page: int = Query(default=1),
+    page_size: int = Query(default=20),
+    _perm: object = Depends(require_permission("admin:task")),
+    db: Session = Depends(get_db),
+):
+    """全局任务运行史（最近在前）。"""
+    page, page_size = page_args(page, page_size)
+    stmt = select(ScheduledTaskRun)
+    if status:
+        stmt = stmt.where(ScheduledTaskRun.status == status)
+    if key:
+        stmt = stmt.where(ScheduledTaskRun.task_key == key)
+    total = int(db.execute(select(func.count()).select_from(stmt.subquery())).scalar() or 0)
+    rows = (
+        db.execute(
+            stmt.order_by(ScheduledTaskRun.started_at.desc(), ScheduledTaskRun.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        .scalars()
+        .all()
+    )
+    return paged([task_service.serialize_run(row) for row in rows], total, page, page_size)
+
+
+@router.get("/tasks/{task_id}/runs")
+def list_task_runs(
+    task_id: int,
+    page: int = Query(default=1),
+    page_size: int = Query(default=10),
+    _perm: object = Depends(require_permission("admin:task")),
+    db: Session = Depends(get_db),
+):
+    """单个任务的运行史。"""
+    task = db.get(ScheduledTask, int(task_id or 0))
+    if not task:
+        raise ApiError("E4040", "调度任务不存在", 404)
+    page, page_size = page_args(page, page_size)
+    total = int(
+        db.execute(
+            select(func.count(ScheduledTaskRun.id)).where(ScheduledTaskRun.task_id == task.id)
+        ).scalar()
+        or 0
+    )
+    rows = (
+        db.execute(
+            select(ScheduledTaskRun)
+            .where(ScheduledTaskRun.task_id == task.id)
+            .order_by(ScheduledTaskRun.started_at.desc(), ScheduledTaskRun.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        .scalars()
+        .all()
+    )
+    return paged([task_service.serialize_run(row) for row in rows], total, page, page_size)
+
+
+@router.post("/tasks/tick")
+def tick_tasks(
+    request: Request,
+    user: CurrentUser,
+    _perm: object = Depends(require_permission("admin:task")),
+    db: Session = Depends(get_db),
+):
+    """立即检查并执行到期任务（等价于调度器一次心跳）。"""
+    from .. import scheduler
+
+    result = scheduler.run_due()
+    write_audit(
+        db,
+        user,
+        "触发调度",
+        MODULE_ADMIN,
+        f"手动触发调度检查：到期 {result.get('checked', 0)} 个，执行 {result.get('triggered', 0)} 个",
+        client_ip(request),
+    )
+    return ok(result)
 
 
 @router.post("/tasks/{task_id}/run")
@@ -528,27 +609,25 @@ def run_task(
     task = db.get(ScheduledTask, int(task_id or 0))
     if not task:
         raise ApiError("E4040", "调度任务不存在", 404)
-    result = _run_task(db, task)
-    task.last_run_at = now()
-    task.last_result = result[:255]
-    db.commit()
-    db.refresh(task)
-    try:
-        notification.broadcast(
-            db,
-            f"调度任务执行完成：{task.name}",
-            result[:200],
-            category="任务",
-            level="低",
-            link="/admin/tasks",
-            commit=True,
-        )
-    except Exception:  # 通知不影响任务执行
-        db.rollback()
+    outcome = _run_task(db, task, operator=user.username, trigger="手动")
     write_audit(
-        db, user, "执行任务", MODULE_ADMIN, f"手动执行任务 {task.name}：{result[:120]}", client_ip(request)
+        db,
+        user,
+        "执行任务",
+        MODULE_ADMIN,
+        f"手动执行任务 {task.name}：{outcome.get('result', '')[:120]}",
+        client_ip(request),
     )
-    return ok({"ok": True, "result": result})
+    return ok(
+        {
+            "ok": outcome.get("status") == "成功",
+            "status": outcome.get("status"),
+            "result": outcome.get("result"),
+            "duration_ms": outcome.get("duration_ms"),
+            "run_id": outcome.get("run_id"),
+            "next_run_at": _fmt_time(task.next_run_at),
+        }
+    )
 
 
 @router.post("/tasks/{task_id}/toggle")
@@ -579,22 +658,35 @@ def toggle_task(
 @router.get("/system/info")
 def system_info(user: CurrentUser, db: Session = Depends(get_db)):
     """系统运行信息。"""
+    from .. import scheduler, storage
+    from ..config import DATABASE_URL, IS_SQLITE, MAIL_ENABLED, MAIL_HOST, MAIL_PORT
     from ..main import STARTED_AT
 
     started_at = datetime.fromtimestamp(STARTED_AT).replace(microsecond=0)
     uptime = max(int(time.time() - STARTED_AT), 0)
+    if IS_SQLITE:
+        db_text = f"SQLite（{DB_PATH.name}）"
+    else:
+        db_text = "MySQL 8（" + DATABASE_URL.split("@")[-1].split("?")[0] + "）"
     return ok(
         {
             "name": APP_NAME,
             "version": APP_VERSION,
             "backend": f"FastAPI / Python {platform.python_version()}",
-            "db": f"SQLite（{DB_PATH.name}）",
+            "db": db_text,
             "python": platform.python_version(),
             "started_at": _fmt_time(started_at),
             "uptime_seconds": uptime,
             "port": PORT,
             "host": HOST,
             "user": user.display_name or user.username,
+            "storage": storage.health(),
+            "scheduler": scheduler.status(),
+            "mail": {
+                "enabled": MAIL_ENABLED,
+                "endpoint": f"{MAIL_HOST}:{MAIL_PORT}",
+                "web_ui": "http://127.0.0.1:8025" if MAIL_ENABLED else "",
+            },
         }
     )
 

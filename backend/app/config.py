@@ -80,5 +80,43 @@ ALERT_SLA_HOURS = int(os.getenv("AGRI_ALERT_SLA_HOURS", "24"))
 # 站内通知保留天数
 NOTIFICATION_RETENTION_DAYS = int(os.getenv("AGRI_NOTIFICATION_RETENTION_DAYS", "90"))
 
+# ---------------------------------------------------------------- M3 基础设施
+# 对象存储：minio（本地 Docker，S3 兼容，默认）| fs（本地目录降级）
+STORAGE_BACKEND = os.getenv("AGRI_STORAGE", "minio").strip().lower()
+STORAGE_ROOT = Path(os.getenv("AGRI_STORAGE_ROOT", str(RUNTIME_DIR / "storage")))
+STORAGE_BUCKET = os.getenv("AGRI_STORAGE_BUCKET", "agri-artifacts")
+MINIO_ENDPOINT = os.getenv("AGRI_MINIO_ENDPOINT", "127.0.0.1:9000")
+MINIO_ACCESS_KEY = os.getenv("AGRI_MINIO_ACCESS_KEY", "agri")
+MINIO_SECRET_KEY = os.getenv("AGRI_MINIO_SECRET_KEY", "Agri_2026_minio")
+MINIO_SECURE = os.getenv("AGRI_MINIO_SECURE", "0") in {"1", "true", "True", "yes"}
+
+# 调度器：进程内 cron 触发，默认开启；门禁/脚本可用 AGRI_SCHEDULER=0 关闭
+SCHEDULER_ENABLED = os.getenv("AGRI_SCHEDULER", "1") not in {"0", "false", "False", "no"}
+SCHEDULER_TICK_SECONDS = int(os.getenv("AGRI_SCHEDULER_TICK", "30"))
+TASK_RUN_RETENTION_DAYS = int(os.getenv("AGRI_TASK_RUN_RETENTION_DAYS", "30"))
+
+# 邮件通道：本地 Mailpit（SMTP 1025 / Web 8025），发送失败只记日志不影响主流程
+MAIL_ENABLED = os.getenv("AGRI_MAIL_ENABLED", "1") not in {"0", "false", "False", "no"}
+MAIL_HOST = os.getenv("AGRI_MAIL_HOST", "127.0.0.1")
+MAIL_PORT = int(os.getenv("AGRI_MAIL_PORT", "1025"))
+MAIL_FROM = os.getenv("AGRI_MAIL_FROM", "agri-platform@local")
+MAIL_TO = os.getenv("AGRI_MAIL_TO", "admin@agri.local")
+MAIL_ALERT_LEVELS = os.getenv("AGRI_MAIL_ALERT_LEVELS", "高")
+MAIL_TIMEOUT = int(os.getenv("AGRI_MAIL_TIMEOUT", "5"))
+
+# 可观测性：结构化访问日志与指标采样
+LOG_DIR = RUNTIME_DIR / "logs"
+LOG_FILE = LOG_DIR / "app.jsonl"
+LOG_MAX_BYTES = int(os.getenv("AGRI_LOG_MAX_BYTES", str(8 * 1024 * 1024)))
+LOG_BACKUP_COUNT = int(os.getenv("AGRI_LOG_BACKUP_COUNT", "3"))
+METRICS_ENABLED = os.getenv("AGRI_METRICS_ENABLED", "1") not in {"0", "false", "False", "no"}
+METRICS_WINDOW_MINUTES = int(os.getenv("AGRI_METRICS_WINDOW_MINUTES", "60"))
+
+# 备份输出目录
+BACKUP_DIR = RUNTIME_DIR / "backups"
+
+for _p in (STORAGE_ROOT, LOG_DIR, BACKUP_DIR):
+    _p.mkdir(parents=True, exist_ok=True)
+
 # 默认管理员账号（首次启动时若库为空则自动初始化）
 DEFAULT_ADMIN = ("admin", "Admin@2026")

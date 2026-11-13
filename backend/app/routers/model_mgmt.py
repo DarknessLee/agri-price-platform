@@ -11,7 +11,7 @@ from ..database import get_db
 from ..models import Region, Variety
 from ..responses import ok
 from ..security import ApiError, client_ip, require_permission, write_audit
-from ..services import forecasting, governance
+from ..services import experiments, forecasting, governance
 
 router = APIRouter(tags=["模型管理"])
 
@@ -80,6 +80,46 @@ def models_drift(
 ):
     """模型漂移监控：特征分布 PSI、近期回测 MAPE 与漂移等级（结果缓存 120 秒）。"""
     return ok(governance.model_drift(db, window))
+
+
+@router.get("/models/runs")
+def models_runs(
+    variety_id: int | None = Query(default=None),
+    region_id: int | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    user: Any = Depends(require_permission("forecast:view")),
+    db: Session = Depends(get_db),
+):
+    """模型实验记录：每次训练的参数、指标、耗时与产物对象键（时间倒序）。"""
+    items, total = experiments.list_runs(db, variety_id, region_id, limit)
+    return ok({"list": items, "total": total})
+
+
+@router.post("/models/retrain-drifted")
+def models_retrain_drifted(
+    request: Request,
+    body: dict | None = Body(default=None),
+    user: Any = Depends(require_permission("model:manage")),
+    db: Session = Depends(get_db),
+):
+    """重训漂移模型：只重训漂移等级为「漂移」的组合，最多 limit 组。"""
+    data = _body_dict(body)
+    result = experiments.retrain_drifted(
+        db,
+        user,
+        limit=data.get("limit", 5),
+        window=data.get("window", 90),
+    )
+    write_audit(
+        db,
+        user,
+        "重训漂移模型",
+        "模型管理",
+        f"窗口={data.get('window', 90)} 上限={data.get('limit', 5)} "
+        f"成功={result.get('trained', 0)} 失败={result.get('failed', 0)}",
+        client_ip(request),
+    )
+    return ok(result)
 
 
 @router.get("/models/compare")

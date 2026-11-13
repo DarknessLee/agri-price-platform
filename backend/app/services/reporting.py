@@ -1,11 +1,12 @@
-"""报告服务：日报 / 周报 / 月报生成、查询与导出（契约 §9）。
+"""报告服务：日报 / 周报 / 月报生成、查询与导出（契约 §9 / M3 §5）。
 
 generate_report(db, user, report_type="daily", date=None, period_start=None, period_end=None,
                 variety_ids=None, region_ids=None, commit=True) -> Report
 
 报告内容为结构化 JSON（sections: [{title, paragraphs, table:{columns, rows}}]），
-并渲染为 HTML 与 Markdown 一并存入 Report.metrics（Report 表无 content 字段），
-同时把 HTML 落盘到 config.REPORT_DIR 供下载。
+并渲染为 HTML 与 Markdown 一并存入 Report.metrics（Report 表无 content 字段）；
+报告正文写入对象存储，Report.file_path 保存对象键（reports/report_{id}_{type}.html），
+MinIO 不可用时 storage 自动落本地 .runtime/storage 同键路径；历史绝对路径文件仍兼容读取。
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..config import REPORT_DIR
+from .. import storage
 from ..database import now
 from ..models import AlertRecord, ForecastResult, ModelVersion, PriceRecord, Region, Report, Variety
 from ..security import ApiError
@@ -61,6 +62,37 @@ def _int_list(value: Any) -> list[int]:
         return [int(item) for item in value]
     except (TypeError, ValueError):
         raise ApiError("E4001", "品种/地区参数格式不正确", 400)
+
+
+def _is_object_key(value: Any) -> bool:
+    """file_path 是否为对象键；历史数据保存的是本地绝对路径。"""
+    text = str(value or "")
+    return text.startswith(("reports/", "models/", "imports/"))
+
+
+def _stored_html(record: Report) -> str:
+    """从对象存储读取报告正文；历史本地文件路径作为兼容回退。"""
+    key = str(record.file_path or "")
+    if key:
+        if _is_object_key(key):
+            content = storage.get_text(key)
+            if content:
+                return content
+        else:
+            try:
+                from pathlib import Path
+
+                path = Path(key)
+                if path.is_file():
+                    return path.read_text(encoding="utf-8")
+            except OSError:
+                pass
+    # 旧数据 file_path 为空时按约定对象键推导，保证迁移后仍可下载
+    if record.id:
+        content = storage.get_text(storage.report_key(record.id, record.report_type))
+        if content:
+            return content
+    return ""
 
 
 def _period_of(report_type: str, date_arg: Any, period_start: Any, period_end: Any) -> tuple[date, date]:
@@ -543,14 +575,14 @@ def generate_report(
     except Exception:
         logger.exception("报告生成通知发送失败：report_id=%s", record.id)
 
-    # HTML 落盘，供 /api/reports/{id}/download 直接读取
+    # 报告正文写入对象存储，file_path 保存对象键，供下载接口直接读取
     try:
-        REPORT_DIR.mkdir(parents=True, exist_ok=True)
-        path = REPORT_DIR / f"report_{record.id}_{report_type}.html"
-        path.write_text(content_html, encoding="utf-8")
-        record.file_path = str(path)
+        key = storage.report_key(record.id, report_type)
+        storage.put_text(key, content_html, content_type="text/html; charset=utf-8")
+        record.file_path = key
         db.add(record)
-    except OSError:
+    except Exception:  # pragma: no cover - 对象存储异常时仍可从 metrics 读取正文
+        logger.exception("报告正文写入对象存储失败：report_id=%s", record.id)
         record.file_path = ""
 
     if commit:
@@ -592,7 +624,9 @@ def serialize_report(record: Report, include_content: bool = False) -> dict:
         "metrics": stats,
     }
     if include_content:
-        data["content_html"] = payload.get("content_html") or _fallback_html(record)
+        data["content_html"] = (
+            payload.get("content_html") or _stored_html(record) or _fallback_html(record)
+        )
         data["sections"] = payload.get("sections", [])
         data["variety_ids"] = record.variety_ids
         data["region_ids"] = record.region_ids
@@ -633,21 +667,33 @@ def delete_report(db: Session, report_id: int, commit: bool = True) -> None:
     record = db.get(Report, int(report_id))
     if record is None:
         raise ApiError("E4040", "报告不存在", 404)
-    file_path = record.file_path
+    file_path = str(record.file_path or "")
+    report_id_value = int(record.id)
+    report_type = str(record.report_type or "")
     db.delete(record)
     if commit:
         db.commit()
+    else:
+        db.flush()
     if file_path:
-        try:
-            from pathlib import Path
+        if _is_object_key(file_path):
+            storage.delete(file_path)
+        else:
+            try:
+                from pathlib import Path
 
-            Path(file_path).unlink(missing_ok=True)
-        except OSError:
-            pass
+                Path(file_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+    # localStorage / 旧版数据兼容：对象键由 id+type 约定推导，删除时一并清理
+    try:
+        storage.delete(storage.report_key(report_id_value, report_type))
+    except Exception:  # pragma: no cover - 清理失败不影响删除结果
+        logger.exception("报告对象清理失败：report_id=%s", report_id_value)
 
 
 def report_download(db: Session, report_id: int, fmt: str = "html") -> tuple[str, str]:
-    """返回 (文件名, 文本内容)；fmt 支持 html / md。"""
+    """返回 (文件名, 文本内容)；fmt 支持 html / md。正文优先从对象存储读取。"""
     record = db.get(Report, int(report_id))
     if record is None:
         raise ApiError("E4040", "报告不存在", 404)
@@ -656,20 +702,13 @@ def report_download(db: Session, report_id: int, fmt: str = "html") -> tuple[str
         raise ApiError("E4001", "导出格式仅支持 html、md 或 xlsx", 400)
     payload = _read_json(record.metrics, {})
     if fmt == "html":
-        content = payload.get("content_html") or ""
-        if not content and record.file_path:
-            try:
-                from pathlib import Path
-
-                content = Path(record.file_path).read_text(encoding="utf-8")
-            except OSError:
-                content = ""
+        content = _stored_html(record) or payload.get("content_html") or ""
         if not content:
             content = _fallback_html(record)
-        extension, media = "html", "text/html; charset=utf-8"
+        extension = "html"
     else:
         content = payload.get("content_md") or ""
-        extension, media = "md", "text/markdown; charset=utf-8"
+        extension = "md"
     if not content:
         content = f"# {record.title}\n\n{record.summary}\n"
     filename = f"{record.report_type}_{record.id}_{record.period_end.strftime('%Y%m%d') if record.period_end else 'report'}.{extension}"

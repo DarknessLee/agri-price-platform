@@ -17,3 +17,4 @@ joblib==1.6.0
 
 httpx==0.29.0
 pytest==9.0.1
+minio>=7.2

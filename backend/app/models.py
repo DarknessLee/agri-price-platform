@@ -436,3 +436,68 @@ class OpenApiCall(Base):
     status: Mapped[int] = mapped_column(Integer, default=200)
     elapsed_ms: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class ScheduledTaskRun(Base):
+    """调度任务运行史：定时/手动每次执行的耗时、结果与异常，供任务看板与排查使用。"""
+
+    __tablename__ = "scheduled_task_run"
+    __table_args__ = (
+        Index("ix_task_run_time", "started_at"),
+        Index("ix_task_run_task", "task_id", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("scheduled_task.id"))
+    task_key: Mapped[str] = mapped_column(String(64), default="")
+    task_name: Mapped[str] = mapped_column(String(128), default="")
+    trigger: Mapped[str] = mapped_column(String(8), default="手动")
+    status: Mapped[str] = mapped_column(String(8), default="成功")
+    result: Mapped[str] = mapped_column(String(500), default="")
+    error: Mapped[str] = mapped_column(String(500), default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ModelRun(Base):
+    """模型训练实验记录：一次训练的参数、回测指标与产物，支撑版本对比与重训追溯。"""
+
+    __tablename__ = "model_run"
+    __table_args__ = (
+        Index("ix_model_run_time", "created_at"),
+        Index("ix_model_run_pair", "variety_id", "region_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    model_id: Mapped[int] = mapped_column(ForeignKey("model_version.id"), default=0)
+    key: Mapped[str] = mapped_column(String(32), default="")
+    name: Mapped[str] = mapped_column(String(128), default="")
+    algorithm: Mapped[str] = mapped_column(String(32), default="")
+    variety_id: Mapped[int] = mapped_column(ForeignKey("dim_variety.id"))
+    region_id: Mapped[int] = mapped_column(ForeignKey("dim_region.id"))
+    version: Mapped[str] = mapped_column(String(32), default="")
+    trigger: Mapped[str] = mapped_column(String(8), default="手动")
+    status: Mapped[str] = mapped_column(String(8), default="成功")
+    params: Mapped[str] = mapped_column(Text, default="{}")
+    metrics: Mapped[str] = mapped_column(Text, default="{}")
+    rows: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    artifact_key: Mapped[str] = mapped_column(String(255), default="")
+    operator: Mapped[str] = mapped_column(String(64), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class EmailLog(Base):
+    """邮件通道发送记录：监控页展示发送状态，失败原因便于排查（本地 Mailpit 收信）。"""
+
+    __tablename__ = "sys_email_log"
+    __table_args__ = (Index("ix_email_time", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    to_addr: Mapped[str] = mapped_column(String(128), default="")
+    subject: Mapped[str] = mapped_column(String(200), default="")
+    category: Mapped[str] = mapped_column(String(32), default="系统")
+    status: Mapped[str] = mapped_column(String(8), default="已发送")
+    reason: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

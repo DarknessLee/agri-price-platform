@@ -9,14 +9,84 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import event, func, or_, select
 from sqlalchemy.orm import Session
 
+from ..config import MAIL_ENABLED, MAIL_TO
 from ..database import now
 from ..models import Notification
+from . import mailer
 
 # 单次事件最多产生多少条广播通知，避免预警扫描批量命中时产生通知风暴
 BROADCAST_LIMIT = 20
+
+# 会话内待发送邮件队列的键：与业务同事务提交，提交成功才发信，回滚则丢弃
+_PENDING_MAILS = "_agri_pending_mails"
+PENDING_MAIL_LIMIT = 30
+
+
+# ---------------------------------------------------------------- 邮件联动
+# 契约 M3 §3：高等级预警、报告生成、任务失败、模型重训成功后发邮件。
+# 邮件必须等业务事务真正提交后再发，避免"通知回滚了邮件却发出去"。
+
+def should_send_mail(category: str, level: str, title: str = "") -> bool:
+    """按通知分类/等级判断是否需要邮件外发。"""
+    levels = mailer.alert_levels()
+    category = str(category or "")
+    level = str(level or "")
+    if category == "预警":
+        return level in levels
+    if category == "报告":
+        return True
+    if category == "模型":
+        return level != "高"  # 模型重训成功
+    if category == "任务":
+        return level in levels or "失败" in str(title or "")
+    return False
+
+
+def _queue_mail(db: Session, title: str, content: str, category: str, level: str, link: str) -> None:
+    """把邮件挂到当前会话，``after_commit`` 时统一发出；关闭邮件通道时直接跳过。"""
+    if not MAIL_ENABLED or not should_send_mail(category, level, title):
+        return
+    pending = db.info.setdefault(_PENDING_MAILS, [])
+    if len(pending) >= PENDING_MAIL_LIMIT:
+        return
+    stamp = now().strftime("%Y-%m-%d %H:%M:%S")
+    lines = [str(title or ""), "", str(content or ""), "", f"时间：{stamp}", f"分类：{category}｜等级：{level}"]
+    if link:
+        lines.append(f"查看：http://127.0.0.1:5177{link}")
+    pending.append(
+        {
+            "subject": f"[{category}] {title}"[:200],
+            "body": "\n".join(lines)[:8000],
+            "category": category,
+        }
+    )
+
+
+@event.listens_for(Session, "after_commit")
+def _flush_queued_mails(session: Session) -> None:
+    """业务提交成功后再发信：发信失败只影响邮件记录，不影响已提交的业务。"""
+    pending = session.info.pop(_PENDING_MAILS, None)
+    if not pending:
+        return
+    for mail in pending:
+        try:
+            mailer.send_mail(
+                to=MAIL_TO,
+                subject=mail.get("subject", ""),
+                body=mail.get("body", ""),
+                category=mail.get("category", "系统"),
+            )
+        except Exception:  # pragma: no cover - mailer 内部已兜底，这里再保一层
+            continue
+
+
+@event.listens_for(Session, "after_rollback")
+def _drop_queued_mails(session: Session) -> None:
+    """事务回滚：丢弃对应的待发邮件，避免发送不存在的通知。"""
+    session.info.pop(_PENDING_MAILS, None)
 
 
 def create_notification(
@@ -47,10 +117,11 @@ def create_notification(
         read_at=None,
     )
     db.add(row)
+    db.flush()
+    # 邮件与通知同事务排队：commit=True 提交后立即外发；commit=False 交由调用方提交时外发
+    _queue_mail(db, row.title, row.content, row.category, row.level, row.link)
     if commit:
         db.commit()
-    else:
-        db.flush()
     return row
 
 

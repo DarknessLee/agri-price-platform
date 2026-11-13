@@ -24,10 +24,13 @@ from .models import (
     AlertRule,
     AuditLog,
     DataSource,
+    EmailLog,
     FeatureRecord,
     ImportTask,
     Market,
     Menu,
+    ModelRun,
+    ModelVersion,
     Notification,
     OpenApiCall,
     OpenApiClient,
@@ -39,6 +42,7 @@ from .models import (
     Role,
     RolePermission,
     ScheduledTask,
+    ScheduledTaskRun,
     User,
     Variety,
 )
@@ -184,6 +188,7 @@ MENUS = [
     ("admin-base", "品种与地区", "/admin/base", "Grid", "", "admin", 83),
     ("admin-audit", "审计日志", "/admin/audit", "Tickets", "", "admin", 84),
     ("admin-tasks", "任务调度", "/admin/tasks", "Timer", "", "admin", 85),
+    ("admin-monitor", "系统监控", "/admin/monitor", "Monitor", "", "admin", 86),
     ("open-api", "开放 API", "/open-api", "Link", "", "", 90),
 ]
 
@@ -459,15 +464,49 @@ def seed_governance(db: Session) -> None:
             created_by="李婷", created_at=NOW - timedelta(days=i + 1, hours=2),
         ))
 
+    from . import scheduler
+
+    task_rows: list[ScheduledTask] = []
     for i, (key, name, cron, desc, status_idx, last_result) in enumerate(SCHEDULED_TASKS):
-        db.add(ScheduledTask(
-            key=key, name=name, cron=cron,
+        last_run_at = NOW - timedelta(hours=9 + i * 3)
+        task = ScheduledTask(
+            key=key,
+            name=name,
+            cron=cron,
             status="启用" if status_idx == 1 else "暂停",
-            last_run_at=NOW - timedelta(hours=9 + i * 3),
+            last_run_at=last_run_at,
             last_result=last_result,
-            next_run_at=NOW + timedelta(hours=6 + i * 2),
+            next_run_at=scheduler.next_run(cron, NOW) or (NOW + timedelta(hours=6 + i * 2)),
             description=desc,
-        ))
+        )
+        db.add(task)
+        task_rows.append(task)
+    db.flush()
+
+    # 运行史：为每个任务补 2~3 条历史，覆盖成功与偶发失败，便于任务看板展示
+    run_samples = {
+        "sync_price": [("成功", "价格数据同步完成：4 个数据源，共 84660 条价格记录", 1840), ("成功", "价格数据同步完成：4 个数据源，共 84660 条价格记录", 1725)],
+        "alert_scan": [("成功", "预警规则扫描完成：检查 6 条规则，新增预警 6 条", 620), ("成功", "预警规则扫描完成：检查 6 条规则，新增预警 4 条", 585)],
+        "model_retrain": [("成功", "模型重训完成（按漂移程度）：成功 5 组，失败 0 组", 26400), ("失败", "执行失败：TimeoutError: 训练服务响应超时", 9000)],
+        "report_daily": [("成功", "日报生成完成：2026-11-11 农产品价格监测日报（状态 已发布）", 2380), ("成功", "日报生成完成：2026-11-10 农产品价格监测日报（状态 已发布）", 2210)],
+        "quality_check": [("成功", "数据质量巡检完成：完整率 100.0%，异常记录 14 条，总记录 84660 条", 760), ("成功", "数据质量巡检完成：完整率 100.0%，异常记录 15 条，总记录 84659 条", 745)],
+    }
+    for task in task_rows:
+        samples = run_samples.get(task.key, [("成功", "任务执行完成", 500)])
+        for offset, (status, result, duration) in enumerate(samples):
+            started = NOW - timedelta(days=offset * 2 + 1, hours=2 + task.id % 5)
+            db.add(ScheduledTaskRun(
+                task_id=task.id,
+                task_key=task.key,
+                task_name=task.name,
+                trigger="定时" if offset == 0 else "手动",
+                status=status,
+                result=result,
+                error="" if status == "成功" else result.replace("执行失败：", ""),
+                duration_ms=duration,
+                started_at=started,
+                finished_at=started + timedelta(milliseconds=duration),
+            ))
 
     audits = [
         ("admin", "登录", "认证", "账号 admin 登录系统"),
@@ -758,6 +797,83 @@ def seed_derived(db: Session, with_models: bool = True) -> None:
 
 # ---------------------------- 入口 ----------------------------
 
+def seed_model_runs(db: Session) -> None:
+    """模型训练实验记录：为在用模型补历史训练批次，供模型管理页对比。"""
+    if db.scalar(select(func.count()).select_from(ModelRun)):
+        return
+    models = (
+        db.execute(
+            select(ModelVersion)
+            .where(ModelVersion.is_active.is_(True))
+            .order_by(ModelVersion.id)
+            .limit(30)
+        )
+        .scalars()
+        .all()
+    )
+    if not models:
+        return
+    param_templates = {
+        "seasonal": {"period": 7, "window": 1411, "method": "seasonal_decompose"},
+        "holt_winters": {"trend": "add", "seasonal": "add", "seasonal_periods": 7},
+        "gbr": {"n_estimators": 260, "learning_rate": 0.05, "max_depth": 3, "lags": 14},
+        "ensemble": {"weights": "inverse_mape", "backtest_days": 60},
+    }
+    for index, model in enumerate(models):
+        algorithm = (model.algorithm or "").lower()
+        metrics = {
+            "mape": round(float(model.mape or 0), 2),
+            "rmse": round(float(model.rmse or 0), 3),
+            "direction_acc": round(float(model.direction_acc or 0), 2),
+            "rows": int(model.rows or 0),
+        }
+        created = NOW - timedelta(days=(index % 6) * 2 + 1, hours=index % 8)
+        db.add(ModelRun(
+            model_id=model.id,
+            key=model.key,
+            name=model.name,
+            algorithm=model.algorithm,
+            variety_id=model.variety_id,
+            region_id=model.region_id,
+            version=model.version,
+            trigger="定时" if index % 4 == 0 else "手动",
+            status="成功",
+            params=json.dumps(param_templates.get(algorithm, {"note": "holdout 回测"}), ensure_ascii=False),
+            metrics=json.dumps(metrics, ensure_ascii=False),
+            rows=int(model.rows or 0),
+            duration_ms=[2140, 3260, 5480, 7920][index % 4],
+            artifact_key=f"models/{model.variety_id}_{model.region_id}_{model.algorithm}_{model.version}.json",
+            operator=["scheduler", "analyst01", "analyst02"][index % 3],
+            created_at=created,
+        ))
+    db.commit()
+    print(f"[seed] 模型实验记录生成完成：{len(models)} 条")
+
+
+def seed_email_logs(db: Session) -> None:
+    """邮件通道记录：预警邮件与测试邮件，供监控页展示。"""
+    if db.scalar(select(func.count()).select_from(EmailLog)):
+        return
+    samples = [
+        ("admin@agri.local", "【高等级预警】生猪价格低位预警", "预警", "已发送", ""),
+        ("op@agri.local", "【高等级预警】鸡蛋同比异常预警", "预警", "已发送", ""),
+        ("admin@agri.local", "日报已生成：2026-11-11 农产品价格监测日报", "报告", "已发送", ""),
+        ("admin@agri.local", "邮件通道连通性测试", "系统", "已发送", ""),
+        ("legacy@agri.local", "【高等级预警】小麦价格高位预警", "预警", "失败", "SMTPRecipientsRefused: 收件人不存在"),
+    ]
+    for index, (to_addr, subject, category, status, reason) in enumerate(samples):
+        db.add(EmailLog(
+            to_addr=to_addr,
+            subject=subject,
+            category=category,
+            status=status,
+            reason=reason,
+            created_at=NOW - timedelta(days=index, hours=3),
+        ))
+    db.commit()
+    print("[seed] 邮件记录生成完成：5 条")
+
+
 def seed_all(db: Session, with_models: bool = True) -> dict:
     seed_reference(db)
     prices, features, _extra = build_prices_and_features()
@@ -766,12 +882,15 @@ def seed_all(db: Session, with_models: bool = True) -> dict:
     seed_alert_rules(db, prices, features)
     seed_engagement(db)
     seed_derived(db, with_models=with_models)
+    seed_model_runs(db)
+    seed_email_logs(db)
 
     stats = {t: int(db.scalar(select(func.count()).select_from(m)) or 0) for t, m in [
         ("varieties", Variety), ("regions", Region), ("markets", Market), ("users", User),
         ("prices", PriceRecord), ("features", FeatureRecord), ("alerts", AlertRecord),
         ("reports", Report), ("audit_logs", AuditLog), ("notifications", Notification),
         ("api_clients", OpenApiClient), ("api_calls", OpenApiCall),
+        ("task_runs", ScheduledTaskRun), ("model_runs", ModelRun), ("email_logs", EmailLog),
     ]}
     print("[seed] 数据统计：" + json.dumps(stats, ensure_ascii=False))
     return stats

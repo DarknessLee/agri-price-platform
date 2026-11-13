@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import threading
+import time
 import warnings
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -48,6 +49,7 @@ from ..models import (
 from ..security import ApiError
 from . import features as feat
 from . import notification
+from . import experiments
 
 warnings.filterwarnings("ignore")
 
@@ -727,8 +729,15 @@ def train_model(
     region_id: int,
     commit: bool = True,
     notify: bool = False,
+    trigger: str = "手动",
+    operator: str = "system",
 ) -> list[ModelVersion]:
-    """训练单个品种×地区的 4 个模型，返回 4 个 ModelVersion（组合模型 active）。"""
+    """训练单个品种×地区的 4 个模型，返回 4 个 ModelVersion（组合模型 active）。
+
+    每次训练同时写 4 条 model_run 实验记录，并把指标与超参归档到对象存储；
+    trigger 取值「手动 / 定时」，operator 记录触发人（定时任务为 system）。
+    """
+    started = time.perf_counter()
     variety, region = _ensure_pair(db, variety_id, region_id)
     matrix = feat.build_training_matrix(db, variety_id, region_id)
     series: pd.Series = matrix["series"]
@@ -883,6 +892,17 @@ def train_model(
 
     if notify:
         _broadcast_training(db, variety.name, region.name, models)
+
+    # 实验记录：4 个算法各写一条 model_run，并归档指标/参数到对象存储（与模型版本同事务）
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    experiments.record_training(
+        db,
+        models,
+        trigger=trigger,
+        operator=operator,
+        duration_ms=duration_ms,
+        commit=False,
+    )
 
     if commit:
         db.commit()
