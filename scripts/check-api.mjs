@@ -3,6 +3,7 @@
  * 依赖：已执行种子数据（缺失或数据不足时自动重建，且跳过模型训练以保证门禁时长可控）。
  */
 import path from 'node:path'
+import { existsSync } from 'node:fs'
 import {
   BACKEND_DIR,
   BASE_URL,
@@ -118,6 +119,24 @@ try {
 
     const noToken = await callApi('/api/dashboard/summary')
     checker.check('未携带 token 访问业务接口返回 401/E4010', noToken.code === 'E4010', `code=${noToken.code} status=${noToken.status}`)
+
+    // 移动 H5：构建产物由后端同源托管在 /m/
+    const h5Index = path.join(ROOT, 'h5', 'dist', 'index.html')
+    if (existsSync(h5Index)) {
+      const h5Res = await fetch(`${BASE_URL}/m/`)
+      const h5Html = await h5Res.text()
+      checker.check('移动 H5 入口可访问（GET /m/）', h5Res.status === 200 && h5Html.includes('<div id="app"'), `status=${h5Res.status}`)
+      checker.check('移动 H5 页面引用 /m/ 静态资源', /\/m\/assets\//.test(h5Html))
+      const redirect = await fetch(`${BASE_URL}/m`, { redirect: 'manual' })
+      checker.check('移动 H5 无斜杠路径重定向', [200, 307, 308].includes(redirect.status), `status=${redirect.status}`)
+      const asset = h5Html.match(/src="(\/m\/assets\/[^"]+\.js)"/)
+      if (asset) {
+        const assetRes = await fetch(`${BASE_URL}${asset[1]}`)
+        checker.check('移动 H5 入口脚本可加载', assetRes.status === 200 && /javascript/.test(assetRes.headers.get('content-type') || ''), `status=${assetRes.status}`)
+      }
+    } else {
+      checker.check('移动 H5 构建产物存在（h5/dist/index.html）', false, '请先执行 npm run build')
+    }
   })
 
   // ---------- 2. 角色与权限隔离 ----------

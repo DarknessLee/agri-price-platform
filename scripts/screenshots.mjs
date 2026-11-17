@@ -21,6 +21,13 @@ if (!existsSync(distIndex)) {
   process.exit(1)
 }
 
+const h5Index = path.join(ROOT, 'h5', 'dist', 'index.html')
+if (!existsSync(h5Index)) {
+  console.error('未找到 h5/dist，请先执行 npm run build')
+  console.log('RESULT=FAIL passed=0 failed=1 用时=0.0s')
+  process.exit(1)
+}
+
 const PAGES = [
   { path: '/login', file: '00-登录页.png', anonymous: true },
   { path: '/dashboard', file: '01-综合驾驶舱.png' },
@@ -45,6 +52,16 @@ const PAGES = [
   { path: '/open-api', file: '19-开放API.png' },
   { path: '/screen', file: '21-数据大屏.png', prepare: { wait: 6000 } },
   { path: '/admin/monitor', file: '22-系统监控.png', prepare: { wait: 5000 } },
+]
+
+// 移动 H5 端：独立子应用，由后端以 /m/ 前缀同源托管，按手机尺寸截图
+const MOBILE_PAGES = [
+  { path: '/m/login', file: 'h5-01-登录.png', anonymous: true },
+  { path: '/m/', file: 'h5-02-首页.png', wait: 2500 },
+  { path: '/m/prices', file: 'h5-03-行情.png', wait: 2000 },
+  { path: '/m/forecast', file: 'h5-04-预测.png', prepare: { button: /开始预测/, wait: 9000 } },
+  { path: '/m/alerts', file: 'h5-05-预警.png', wait: 2000 },
+  { path: '/m/me', file: 'h5-06-我的.png', wait: 1500 },
 ]
 
 const backend = await startBackend({ port: 8017, logFile: path.join(ROOT, '.runtime', 'logs', 'backend-screenshots.log') })
@@ -162,12 +179,69 @@ try {
   } catch (error) {
     failedPages.push(`权限隔离页（${String(error).slice(0, 120)}）`)
   }
+  // 移动 H5 端（390×844，模拟手机）
+  try {
+    const mobile = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      deviceScaleFactor: 2,
+      isMobile: true,
+      hasTouch: true,
+      locale: 'zh-CN',
+      timezoneId: 'Asia/Shanghai',
+    })
+    const mPage = await mobile.newPage()
+    const setMobileSession = async () => {
+      const store = storage(adminAuth)
+      await mPage.addInitScript(
+        ([token, user, perms]) => {
+          localStorage.setItem('ap_token', token)
+          localStorage.setItem('ap_user', user)
+          localStorage.setItem('ap_perms', perms)
+        },
+        [store.token, store.user, store.perms],
+      )
+    }
+    for (const item of MOBILE_PAGES) {
+      try {
+        if (item.anonymous) {
+          await mPage.addInitScript(() => localStorage.clear())
+        } else {
+          await setMobileSession()
+        }
+        await mPage.goto(`http://127.0.0.1:8017${item.path}`, { waitUntil: 'domcontentloaded' })
+        await mPage.waitForLoadState('networkidle').catch(() => undefined)
+        if (item.prepare?.button) {
+          const button = mPage.getByRole('button', { name: item.prepare.button }).first()
+          if (await button.count()) {
+            await button.click({ timeout: 8000 }).catch(() => undefined)
+            await mPage.waitForTimeout(item.prepare.wait ?? 5000)
+          }
+        }
+        await mPage.waitForTimeout(item.wait ?? 1500)
+        await mPage.keyboard.press('Escape').catch(() => undefined)
+        const target = path.join(SCREENSHOT_DIR, item.file)
+        // 移动端按手机首屏截图（不使用整页长图，避免固定底栏在长图中错位遮挡内容）
+        await mPage.screenshot({ path: target, fullPage: false })
+        if (statSync(target).size > 8000) {
+          saved += 1
+          console.log(`已保存截图：${item.file}`)
+        } else {
+          failedPages.push(`${item.file}（文件过小）`)
+        }
+      } catch (error) {
+        failedPages.push(`${item.file}（${String(error).slice(0, 120)}）`)
+      }
+    }
+    await mobile.close().catch(() => undefined)
+  } catch (error) {
+    failedPages.push(`移动端截图（${String(error).slice(0, 120)}）`)
+  }
 } finally {
   if (browser) await browser.close().catch(() => undefined)
   backend.stop()
 }
 
-  const ok = saved >= 22 && failedPages.length === 0
+const ok = saved >= 28 && failedPages.length === 0
 if (failedPages.length > 0) console.log(`截图失败：${failedPages.join('；')}`)
 console.log(`截图目录：${SCREENSHOT_DIR}`)
 process.exit(report(saved, failedPages.length, startedAt) && ok ? 0 : 1)

@@ -140,6 +140,20 @@ const routeImports = [...routerCode.matchAll(/import\('@\/views\/([^']+)'\)/g)].
 const missingViews = routeImports.filter((rel) => !existsSync(path.join(ROOT, 'frontend', 'src', 'views', `${rel}.vue`)))
 checker.check('路由引用的视图文件全部存在', routeImports.length >= 19 && missingViews.length === 0, `缺少 ${missingViews.join(',')}`)
 
+// ---------- 7.1 移动 H5 端 ----------
+const h5ViewsDir = path.join(ROOT, 'h5', 'src', 'views')
+const h5ViewFiles = existsSync(h5ViewsDir)
+  ? readdirSync(h5ViewsDir).filter((name) => name.endsWith('.vue')).map((name) => path.join(h5ViewsDir, name))
+  : []
+checker.check('移动 H5 页面齐全（>= 6 个视图）', h5ViewFiles.length >= 6, `实际 ${h5ViewFiles.length}`)
+const h5Placeholders = h5ViewFiles.filter((file) => /页面建设中|功能开发中/.test(readFileSync(file, 'utf8')))
+checker.check('移动 H5 无页面占位残留', h5Placeholders.length === 0, h5Placeholders.map((f) => path.relative(ROOT, f)).join(','))
+checker.check('移动 H5 构建产物存在（h5/dist/index.html）', existsSync(path.join(ROOT, 'h5', 'dist', 'index.html')))
+checker.check('移动 H5 截图 >= 4 张（h5- 前缀）', shots.filter((name) => name.startsWith('h5-')).length >= 4, `实际 ${shots.filter((name) => name.startsWith('h5-')).length}`)
+const readmeText = read('README.md')
+checker.check('README 说明移动 H5 访问入口', /移动\s*H5|移动端/.test(readmeText) && /\/m\//.test(readmeText))
+checker.check('移动 H5 有端到端用例', exists('e2e/h5.spec.ts') && read('e2e/h5.spec.ts').length > 800)
+
 // ---------- 8. 对外措辞与代码整洁 ----------
 const deliveredDocs = ['README.md', 'docs/用户手册.md', 'docs/接口契约.md', 'docs/数据字典.md']
 const forbidden = /演示|(?<![情])模拟|[Dd]emo|[Mm]ock/
@@ -149,7 +163,7 @@ for (const file of deliveredDocs) {
   const hit = content.match(forbidden)
   if (hit) offenders.push(`${file}:${hit[0]}`)
 }
-for (const file of viewFiles) {
+for (const file of viewFiles.concat(h5ViewFiles)) {
   const content = readFileSync(file, 'utf8')
   const hit = content.match(forbidden)
   if (hit) offenders.push(`${path.relative(ROOT, file)}:${hit[0]}`)

@@ -11,7 +11,7 @@ const STAGE = path.join(OUT_DIR, '.pkg');
 const APP = path.join(STAGE, 'agri-price-platform');
 const ZIP = path.join(OUT_DIR, '12-源码与部署包.zip');
 
-const SKIP_DIRS = new Set(['node_modules', '.venv', '.git', '.runtime', '.build-tmp', '__pycache__', '.pytest_cache', 'test-results', '.pkg']);
+const SKIP_DIRS = new Set(['node_modules', '.venv', '.git', '.runtime', '.build-tmp', '.tmp', '__pycache__', '.pytest_cache', 'test-results', '.pkg']);
 
 /** 需要进入交付包的顶层条目 */
 const ENTRIES = [
@@ -31,6 +31,13 @@ const ENTRIES = [
   'frontend/tsconfig.json',
   'frontend/index.html',
   'frontend/dist',
+  'h5/src',
+  'h5/package.json',
+  'h5/package-lock.json',
+  'h5/vite.config.ts',
+  'h5/tsconfig.json',
+  'h5/index.html',
+  'h5/dist',
   'scripts',
   'e2e',
   'deploy',
@@ -130,6 +137,7 @@ const zipSize = fs.existsSync(ZIP) ? fs.statSync(ZIP).size : 0;
 check('压缩包大小合理（>5MB 且 <300MB）', zipSize > 5 * 1024 * 1024 && zipSize < 300 * 1024 * 1024, `${(zipSize / 1024 / 1024).toFixed(1)} MB`);
 check('包含后端代码', fs.existsSync(path.join(APP, 'backend', 'app', 'main.py')));
 check('包含前端代码与构建产物', fs.existsSync(path.join(APP, 'frontend', 'src', 'main.ts')) && fs.existsSync(path.join(APP, 'frontend', 'dist', 'index.html')));
+check('包含移动 H5 代码与构建产物', fs.existsSync(path.join(APP, 'h5', 'src', 'main.ts')) && fs.existsSync(path.join(APP, 'h5', 'dist', 'index.html')));
 check('包含部署编排', fs.existsSync(path.join(APP, 'deploy', 'docker-compose.yml')));
 check('包含门禁脚本', fs.existsSync(path.join(APP, 'scripts', 'lib.mjs')) && fs.existsSync(path.join(APP, 'scripts', 'gate.mjs')));
 check('包含交付文档', fs.existsSync(path.join(APP, 'deliverables', '00-交付物清单.md')));
