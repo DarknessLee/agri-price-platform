@@ -203,7 +203,7 @@ const horizon = ref(14);
 
 const running = ref(false);
 const result = ref<ForecastResult | null>(null);
-const detailActive = ref<string>('');
+const detailActive = ref<string[]>([]);
 const resultAnchor = ref<HTMLDivElement | null>(null);
 
 const recent = ref<RecentForecast[]>([]);
@@ -420,7 +420,7 @@ async function runForecast(): Promise<void> {
       await new Promise<void>((resolve) => setTimeout(resolve, 1200 - elapsed));
     }
     result.value = data;
-    detailActive.value = '';
+    detailActive.value = [];
     showToast('预测完成');
     void loadRecent();
     await nextTick();
