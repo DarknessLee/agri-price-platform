@@ -1,34 +1,34 @@
 # 当前状态（STATUS）
 
 - 项目/版本：农产品价格预测分析系统 V1.0（`agri-price-platform`）
-- 当前阶段：M3 完成（基础设施增强：调度与任务运行史、对象存储、可观测性与邮件通道、模型实验跟踪与备份；五道门禁 324 项通过）；已按开发书第 12 节补齐 13 项交付物（`deliverables/`）
-- 最近更新：2026-11-13
+- 当前阶段：M4 完成（移动 H5 端：登录/首页/行情/预测/预警处置/个人中心，由后端以 `/m/` 同源托管；五道门禁 347 项通过）；已按开发书第 12 节补齐 13 项交付物（`deliverables/`）
+- 最近更新：2026-11-17
 - 当前分支：`master`（远端 `gitea` + `github`，`git pushall` 同时推送）
-- 运行入口：`npm run infra:up`（MySQL 13306 / Redis 16379 / MinIO 9000-9001 / Mailpit 1025-8025 就绪检查）→ `npm run seed` → `npm run dev` → 前端 `http://127.0.0.1:5177`、后端 `http://127.0.0.1:8017`
+- 运行入口：`npm run infra:up`（MySQL 13306 / Redis 16379 / MinIO 9000-9001 / Mailpit 1025-8025 就绪检查）→ `npm run seed` → `npm run dev` → 前端 `http://127.0.0.1:5177`、后端 `http://127.0.0.1:8017`、移动 H5 `http://127.0.0.1:8017/m/`（开发服务 `http://127.0.0.1:5178/m/`）
 - 数据重建：`npm run seed`（清空 MySQL 库 `agri_price` 并重建 84,660 条价格、31,380 条特征、120 个模型版本、19 条站内通知、10 条任务运行史、5 条邮件记录与开放 API 调用流水）
 - 数据备份：`npm run backup`（mysqldump + 对象清单 + 关键表行数，保留最近 7 份于 `.runtime/backups/`）
-- 技术栈：Vue 3 + TypeScript + ECharts 前端；FastAPI + SQLAlchemy + MySQL 8 后端；Redis 7 缓存、限流与令牌黑名单；MinIO（S3）对象存储；Mailpit 收件箱（均支持降级）；SQLite 作为无 Docker 环境的回退存储
+- 技术栈：Vue 3 + TypeScript + ECharts 前端；移动 H5 子应用（Vue 3 + Vant 4，`h5/`，`/m/` 同源托管）；FastAPI + SQLAlchemy + MySQL 8 后端；Redis 7 缓存、限流与令牌黑名单；MinIO（S3）对象存储；Mailpit 收件箱（均支持降级）；SQLite 作为无 Docker 环境的回退存储
 - 内置账号：`admin/Admin@2026`、`analyst01/Analyst@2026`、`operator01/Operator@2026`、`viewer01/Viewer@2026`
 
 ## 最近验收
 
 | 门禁 | 命令 | 结果 |
 | --- | --- | --- |
-| 构建 | `npm run build` | `RESULT=PASS passed=12 failed=0 用时=16s` |
+| 构建 | `npm run build` | `RESULT=PASS passed=20 failed=0 用时=26s` |
 | 数据库 | `npm run db:validate` | `RESULT=PASS passed=40 failed=0 用时=1s` |
-| 接口 | `npm run test:api` | `RESULT=PASS passed=212 failed=0 用时=22s` |
-| 端到端 | `npm run test:e2e` | `RESULT=PASS passed=21 failed=0 用时=60s` |
-| 文档 | `npm run check:docs` | `RESULT=PASS passed=39 failed=0 用时=0.0s` |
-| 汇总 | `npm run gate` | `RESULT=PASS passed=324 failed=0 用时=92s` |
+| 接口 | `npm run test:api` | `RESULT=PASS passed=216 failed=0 用时=26s` |
+| 端到端 | `npm run test:e2e` | `RESULT=PASS passed=26 failed=0 用时=71s` |
+| 文档 | `npm run check:docs` | `RESULT=PASS passed=45 failed=0 用时=0.0s` |
+| 汇总 | `npm run gate` | `RESULT=PASS passed=347 failed=0 用时=124s` |
 
 一键复跑：`npm run gate`（串行执行五道门禁，任一失败即停止并保留日志于 `.runtime/artifacts/`）。
 
 ## 交付物
 
-- 代码：`backend/`（FastAPI，30 张表、14 路由模块、15 服务模块，MySQL 存储 + Redis 缓存/限流 + MinIO 对象存储 + 进程内调度器）、`frontend/`（Vue3 + TS，25 视图，含数据大屏与系统监控）、`scripts/`（门禁、压测、备份、启动与数据服务脚本）、`e2e/`（Playwright 用例）、`deploy/docker-compose.yml`（MySQL / Redis / MinIO / Mailpit 编排）
+- 代码：`backend/`（FastAPI，30 张表、14 路由模块、15 服务模块，MySQL 存储 + Redis 缓存/限流 + MinIO 对象存储 + 进程内调度器）、`frontend/`（Vue3 + TS，25 视图，含数据大屏与系统监控）、`h5/`（Vue3 + Vant 4，6 个移动页面，构建到 `h5/dist` 由后端 `/m/` 托管）、`scripts/`（门禁、压测、备份、启动与数据服务脚本）、`e2e/`（Playwright 用例，含移动端用例）、`deploy/docker-compose.yml`（MySQL / Redis / MinIO / Mailpit 编排）
 - 文档：`README.md`、`STATUS.md`、`DECISIONS.md`、`PLAN-MATRIX.md`、`docs/方案解读卡.md`、`docs/接口契约.md`、`docs/接口契约-M2.md`、`docs/接口契约-M3.md`、`docs/用户手册.md`、`docs/数据字典.md`（阶段验收报告为过程文档，已按手册清理且不纳入 git）
 - 交付物包：`deliverables/`（开发书 §12 的 13 项：需求规格、系统设计、数据库设计、接口文档、数据治理规范、模型训练与回测报告、测试报告、安全与合规说明、部署运维手册、用户操作手册、培训材料、源码与部署包、验收报告），`npm run package:zip` 重新生成 `12-源码与部署包.zip`，`npm run deliverables` 校验齐全性与行数（51 项断言）；另附客户介绍 `deliverables/14-农产品价格监测预测分析平台-客户介绍.docx`（业务流程、操作步骤与 21 张界面截图）
-- 证据：`docs/screenshots/`（24 张界面截图，含数据大屏、模型监测、系统监控、权限隔离）、`.runtime/artifacts/`（门禁日志、E2E 报告）、`.runtime/backups/`（备份产物）
+- 证据：`docs/screenshots/`（30 张截图：电脑端 24 张 + 移动端 6 张 `h5-01`~`h5-06`）、`.runtime/artifacts/`（门禁日志、E2E 报告）、`.runtime/backups/`（备份产物）
 
 ## 指标现状
 

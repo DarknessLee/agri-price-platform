@@ -31,3 +31,5 @@ Thumbs.db
 .vscode/
 *.swp
 pip-unpack-*/
+
+h5/.tmp/

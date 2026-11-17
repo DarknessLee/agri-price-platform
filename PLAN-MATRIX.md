@@ -2,7 +2,7 @@
 
 > 状态只用四种：`已实现` / `部分`（写清差什么）/ `暂缓`（写触发条件）/ `不做`（写理由）。
 > 依据《农产品价格预测分析系统开发书（草案）》章节。证据列指向可复核的位置：接口门禁用例（`npm run test:api`）、端到端用例（`npm run test:e2e`）、截图（`docs/screenshots/`）、实现文件。
-> 最近核对：M3（2026-11-13），五道门禁全 PASS（324 项断言），详见 `STATUS.md`。
+> 最近核对：M4（2026-11-17），五道门禁全 PASS（347 项断言），详见 `STATUS.md`。
 
 | 能力/交付项 | 方案出处 | 状态 | 证据（用例/文档/截图） | 备注 |
 | --- | --- | --- | --- | --- |
@@ -16,7 +16,8 @@
 | 监测：多市场对比（批发/零售） | §4.3 | 已实现 | `/api/prices`、`frontend/src/views/monitor/PriceMonitor.vue`、截图 02 | 12 个市场、2 种市场类型 |
 | 监测：同比环比、季节指数、波动率、价差、比价 | §4.3 | 已实现 | `/api/prices/seasonality`、`/region-spread`、`/variety-compare`、截图 03 | 四项指标口径见用户手册 §4 |
 | 监测：成本收益、供需景气指数 | §4.3 | 部分 | `feature_record.cost_index/freight_index/weather_score` | 以特征指标呈现，未做收益核算报表 |
-| 监测：PC/大屏/响应式 | §4.3 | 已实现 | `layouts/MainLayout.vue`、驾驶舱与 19 页面、`views/Screen.vue` 数据大屏、截图 01~21 | 大屏为独立整屏（30 秒刷新）；1680×1050 与 1440 宽自适应，移动端未专项适配 |
+| 监测：PC/大屏/响应式 | §4.3 | 已实现 | `layouts/MainLayout.vue`、驾驶舱与 19 页面、`views/Screen.vue` 数据大屏、截图 01~21 | 大屏为独立整屏（30 秒刷新）；1680×1050 与 1440 宽自适应 |
+| 移动 H5 查询 | §4.3 / §5 P1 | 已实现 | `h5/`（Vue3 + Vant4 子应用）、`backend/app/main.py` 的 `/m/` 托管、`e2e/h5.spec.ts`、截图 `h5-01`~`h5-06` | 移动端提供登录、首页指标、行情、预测、预警处置与个人中心；管理类功能仍在 PC 端 |
 | 预测：短期 7～30 天 | §4.4 | 已实现 | test:api 预测段（14 点区间/方向/解释）、截图 04 | horizon 支持 1~60，默认 14 |
 | 预测：中期 1～3 个月 | §4.4 | 暂缓 | — | 触发条件：需要月度经营决策支持时扩展 horizon 与月度模型 |
 | 预测：点/区间/置信度/方向 | §4.4 | 已实现 | `/api/forecast/run` 返回结构、截图 04 | 区间按回测残差分位数生成 |
@@ -50,5 +51,5 @@
 | 中间件：可观测性（替代 ELK/Prometheus） | §5.1 | 已实现 | `backend/app/logging_setup.py`（JSONL + request_id）、`services/metrics.py`（分钟桶）、`/api/logs`、`/api/metrics/*`、`/api/system/status`、截图 22 | 指标驻留内存（重启归零）、日志尾部检索；未接外部告警 |
 | 中间件：实验跟踪（替代 MLflow） | §5.1 | 已实现 | `model_run` 表、`services/experiments.py`、`/api/models/runs`、`/api/models/retrain-drifted`、`views/forecast/ModelManage.vue` 实验记录 | 记录算法/超参/指标/耗时/产物键；无 run 级 UI 对比矩阵 |
 | 中间件：Kafka/K8s/TimescaleDB | §5.1 | 暂缓 | `DECISIONS.md` D05/D15/D22/D23 | 触发条件：生产化部署、多实例并发与亿级时序数据；当前用后台线程 + compose + MySQL 聚合替代 |
-| 交付：一键启动/种子重建/备份/门禁/文档/截图 | §12 | 已实现 | `npm run dev`、`npm run seed`、`npm run backup`、`npm run gate`（五门禁 324 项断言）、10 份长期文档、24 张截图 | 见 `STATUS.md` |
+| 交付：一键启动/种子重建/备份/门禁/文档/截图 | §12 | 已实现 | `npm run dev`、`npm run seed`、`npm run backup`、`npm run gate`（五门禁 347 项断言）、10 份长期文档、30 张截图 | 见 `STATUS.md` |
 | 软著登记材料（60 页源码+手册+申请表） | 案例复盘 §17.8 | 不做 | — | 默认不做；如需要另行立项 |
