@@ -1,8 +1,8 @@
-/** 本地开发：同时启动后端（8017）与前端开发服务器（5177）。 */
+/** 本地开发：同时启动后端（8017）、电脑端前端（5177）与移动 H5 开发服务（5178）。 */
 import { spawn } from 'node:child_process'
 import { openSync } from 'node:fs'
 import path from 'node:path'
-import { BACKEND_DIR, FRONTEND_DIR, LOG_DIR, NPM, ROOT, VENV_PY, ensureDirs, sleep, waitHealth } from './lib.mjs'
+import { BACKEND_DIR, FRONTEND_DIR, H5_DIR, LOG_DIR, NPM, ROOT, VENV_PY, ensureDirs, sleep, waitHealth } from './lib.mjs'
 
 ensureDirs()
 const backendLog = openSync(path.join(LOG_DIR, 'backend-dev.log'), 'w')
@@ -48,10 +48,23 @@ const frontend = spawn(NPM, ['run', 'dev'], {
 })
 children.push(frontend)
 
-await sleep(1500)
-console.log('\n前端地址：http://127.0.0.1:5177')
-console.log('默认账号：admin / Admin@2026')
-console.log('按 Ctrl+C 停止前后端进程。\n')
+// 移动 H5：独立 Vite 服务（5178，/m/ 前缀，/api 代理到 8017）
+const h5 = spawn(NPM, ['run', 'dev'], {
+  cwd: H5_DIR,
+  stdio: 'inherit',
+  shell: process.platform === 'win32',
+  windowsHide: true,
+})
+children.push(h5)
 
-await new Promise((resolve) => frontend.on('exit', resolve))
+await sleep(1500)
+console.log('\n电脑端：http://127.0.0.1:5177')
+console.log('移动 H5：http://127.0.0.1:5178/m/')
+console.log('默认账号：admin / Admin@2026')
+console.log('按 Ctrl+C 停止全部进程。\n')
+
+await new Promise((resolve) => {
+  frontend.on('exit', resolve)
+  h5.on('exit', resolve)
+})
 shutdown()

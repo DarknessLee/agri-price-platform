@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import APP_NAME, APP_VERSION, BASE_DIR, MAIL_ENABLED, MAIL_HOST, MAIL_PORT, SCHEDULER_ENABLED
@@ -178,6 +178,31 @@ def health():
 # ---------------------- 前端静态资源（构建产物存在时） ----------------------
 
 DIST_DIR = BASE_DIR / "frontend" / "dist"
+H5_DIR = BASE_DIR / "h5" / "dist"
+
+
+def _mount_h5() -> None:
+    """移动端 H5：构建产物挂载到 /m/，与 PC 端共用同一套接口。"""
+    if not H5_DIR.exists():
+        return
+
+    assets_dir = H5_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/m/assets", StaticFiles(directory=assets_dir), name="h5-assets")
+
+    @app.get("/m", include_in_schema=False)
+    def h5_root():
+        return RedirectResponse(url="/m/")
+
+    @app.get("/m/{full_path:path}", include_in_schema=False)
+    def h5_fallback(full_path: str):
+        target = H5_DIR / full_path
+        if full_path and target.is_file():
+            return FileResponse(target)
+        return FileResponse(H5_DIR / "index.html")
+
+
+_mount_h5()
 
 if DIST_DIR.exists():
     app.mount("/assets", StaticFiles(directory=DIST_DIR / "assets"), name="assets")

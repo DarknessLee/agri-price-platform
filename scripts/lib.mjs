@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 export const ROOT = fileURLToPath(new URL('..', import.meta.url))
 export const BACKEND_DIR = path.join(ROOT, 'backend')
 export const FRONTEND_DIR = path.join(ROOT, 'frontend')
+export const H5_DIR = path.join(ROOT, 'h5')
 export const RUNTIME_DIR = path.join(ROOT, '.runtime')
 export const LOG_DIR = path.join(RUNTIME_DIR, 'logs')
 export const ARTIFACT_DIR = path.join(RUNTIME_DIR, 'artifacts')
@@ -70,8 +71,8 @@ export function requireVenv() {
 }
 
 /** 前端构建临时目录：规避本机系统 Temp 清理被拒导致 esbuild 失败。 */
-export function frontendEnv() {
-  const tmp = path.join(FRONTEND_DIR, '.tmp')
+export function frontendEnv(dir = FRONTEND_DIR) {
+  const tmp = path.join(dir, '.tmp')
   if (!existsSync(tmp)) mkdirSync(tmp, { recursive: true })
   return { TMP: tmp, TEMP: tmp }
 }
